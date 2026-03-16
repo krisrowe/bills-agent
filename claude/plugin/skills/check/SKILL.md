@@ -110,6 +110,45 @@ When Monarch data is insufficient, search **both configured email profiles** for
 - `auto_pay_min` — Autopay for minimum payment only
 - `manual` — Requires manual payment each cycle
 
+## Multi-Stream Merchant Resolution
+
+When one merchant (e.g., an insurer) handles multiple policies paid from different accounts,
+Monarch creates one merchant with one recurring amount — which is wrong for all but one policy.
+
+**Detection:** A recurring stream's amount doesn't match actual transaction amounts for that
+merchant, OR transactions from the same merchant post to multiple accounts with different amounts.
+
+**Resolution workflow** (uses monarch-access tools):
+
+1. **Identify patterns**: Search transactions for the merchant, group by account + amount pattern
+2. **Create new merchants**: Reassign transactions to descriptive names using `update_transaction`
+   with a new `merchant_name` — Monarch auto-creates the merchant
+3. **Set up recurring**: Use `update_recurring` or the `updateMerchant` mutation to set correct
+   amount, frequency, and baseDate on each new merchant
+4. **Copy logo**: Use `setMerchantLogo` to copy the original merchant's cloudinary logo ID
+5. **Deactivate original**: Use `update_recurring(stream_id, status="inactive")` on the original
+
+**Example:** "State Farm" paying auto from checking, home from joint, rental from property account
+→ Split into "State Farm (Auto)", "State Farm (Home)", "State Farm (Rental)" with correct amounts.
+
+## Stale Merchant Detection
+
+When a recurring stream has `last_paid_date` older than 4 months or null:
+- The obligation may be closed/paid off
+- The merchant name may have changed (vendor acquisition, rebranding)
+- The loan may have transferred to a new servicer
+- The account credential may be disconnected
+
+**Do not assume — investigate.** Search transactions for the account for similar amounts,
+check for new merchants appearing around the time the old one stopped, and check account
+sync status. Present findings to the user for a decision.
+
+**Fix the source, not the filter.** If a stream is stale, guide the user to either:
+- Mark it inactive via `update_recurring(stream_id, status="inactive")` (reversible)
+- Remove it via `update_recurring(stream_id, status="removed")` (permanent)
+
+Do NOT add workarounds or ignore-lists in the bills config.
+
 ## Important Notes
 
 - Update config incrementally as you discover info — don't wait until the end
