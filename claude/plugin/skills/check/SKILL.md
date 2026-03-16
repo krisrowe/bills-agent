@@ -72,39 +72,79 @@ For spouse-managed bills (`managed_by` set):
 
 First present any **ALERTS** (overdue, promo deadlines, disconnected accounts).
 
-Then present the **complete bill inventory** organized by entity. Each entity gets a numbered
-list so the user can easily see whether everything is accounted for.
+Then present the **complete bill inventory** in three sections.
 
-**Entity types (in order):**
-1. Each property from config (primary residence, each rental, etc.)
-2. Credit Accounts — all credit cards, store cards, and lines of credit
-3. Personal — non-property bills (phone, insurance, child support)
+---
 
-**For each entity, show a numbered table with columns:**
+**SECTION 1: Credit Accounts**
+
+All credit cards, store cards, and lines of credit (NOT mortgages — those go under properties).
+One row per account from config. Numbered sequentially.
+
+| # | Account | Last4 | Issuer | Day Due | Balance | Method | Status |
+|---|---------|-------|--------|---------|---------|--------|--------|
+
+- **Day Due** — from config `due_day`
+- **Balance** — current balance from Monarch `list_accounts`
+- **Method** — `auto_pay_full`, `auto_pay_min`, `manual` from config
+- **Status** — ✅ Current, ⚠️ Due Soon, ❌ Overdue, 🔌 Disconnected
+
+Flag any promo accounts with deadline info beneath the table.
+
+---
+
+**SECTION 2: Properties**
+
+One sub-section per property from config. For each property, show a **statically numbered**
+list of every bill that should exist for that property type.
+
+**Expected bills by property type:**
+
+Residence: (1) Mortgage, (2) Electric/Gas, (3) Water/Trash, (4) Internet, (5) Home Insurance,
+(6) Property Tax, plus any additional (HELOC, HOA, etc.)
+
+Active rental: (1) Mortgage, (2) Electric, (3) Water, (4) Trash, (5) Internet, (6) Insurance,
+(7) Property Tax, (8) Management fees, plus any additional
+
+Land-only (no structure, no tenants): (1) Property Tax only
+
+The static numbering is the **expected minimum**. Every property should have these. If a bill
+for a static number is missing from both config AND Monarch, show it as a gap row:
 
 | # | Bill | Vendor | Day Due | Amount | Method | Last Paid | Status |
 |---|------|--------|---------|--------|--------|-----------|--------|
+| 1 | Mortgage | Vendor | 1 | $X | auto_draft | 3/2 | ✅ |
+| 2 | Electric | — | — | — | — | — | ❓ NOT TRACKED |
+| 3 | Water | — | — | — | — | — | ❓ NOT TRACKED |
 
-Where:
-- **#** — sequential number within the entity (so user can count and verify completeness)
-- **Bill** — bill name from config, or merchant name from Monarch if untracked
-- **Vendor** — merchant/vendor name
-- **Day Due** — day of month from config `due_day` OR from Monarch `due_date` (extract day)
-- **Amount** — expected from config or actual from Monarch recurring
-- **Method** — payment method from config (auto_draft, auto_pay_full, manual, etc.)
-- **Last Paid** — date from Monarch `last_paid_date`
-- **Status** — ✅ Current, ⚠️ Due Soon, ❌ Overdue, ❓ Unknown, 🔌 Disconnected, 👤 Spouse
+If Monarch shows additional bills not in the static list (e.g., a second electric provider),
+add them with an **ad-hoc letter suffix** to highlight they're discovered but not declared:
 
-**For Credit Accounts specifically**, show:
-- One row per account from config
-- Day Due = `due_day` from config
-- Amount = current balance from Monarch `list_accounts`
-- Method = `payment_method` from config
-- Status = based on whether autopay is configured and account is syncing
+| 4a | Starlink (discovered) | Starlink | 10 | $120 | — | 3/10 | ⚠️ NOT IN CONFIG |
 
-**After the inventory tables**, show:
-- **GAPS** — expected bills not found in Monarch, or Monarch bills not in any entity
-- **PROMO DEADLINES** — if any are within 90 days
+This makes it visually obvious what's expected vs what's discovered vs what's missing.
+
+**Column definitions:**
+- **Day Due** — day of month from config `due_day` OR extracted from Monarch `due_date`
+- **Amount** — from config or Monarch recurring
+- **Method** — from config (auto_draft, auto_pay, manual, etc.)
+- **Last Paid** — from Monarch `last_paid_date`
+- **Status** — ✅ Current, ⚠️ Due Soon, ❌ Overdue, ❓ Unknown/Not Tracked, 🔌 Disconnected, 👤 Spouse
+
+---
+
+**SECTION 3: Personal Essential Bills**
+
+Non-property bills with consequential service disruption (cell phone, auto insurance, child
+support, etc.). Numbered sequentially. Same table format as properties.
+
+---
+
+After all sections, summarize:
+- Total bills tracked vs expected
+- Number of gaps (expected but not found)
+- Number of untracked discoveries (in Monarch but not in config)
+- Action items for the user
 
 For flagged items, ask user for clarification (payment method, missing config, etc.)
 
