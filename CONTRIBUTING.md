@@ -94,6 +94,9 @@ bills/sdk/common/
   properties.py   ← property + bill operations
   filters.py      ← bill filter operations + fnmatch
   budget.py       ← budget scope operations
+  inventory.py    ← bill inventory: ID-based join logic + accountability
+  ignored.py      ← ignored merchant management
+  defaults.yaml   ← property type templates + skip patterns
 
 bills/mcp/
   server.py       ← MCP tool definitions, calls SDK
@@ -107,9 +110,10 @@ If you're writing logic in server.py or cli.py, stop and move it to SDK.
 ### Config Models (Pydantic)
 
 - `PromoFinancing` — a promo plan on a credit account
-- `CreditAccount` — a credit account with payment method and promos
-- `PropertyBill` — a bill associated with a property
-- `Property` — a property with bills
+- `CreditAccount` — a credit account with payment method, promos, and Monarch ID links
+- `PropertyBill` — a bill associated with a property, with Monarch merchant link
+- `IgnoredMerchant` — a Monarch merchant explicitly classified as ignorable
+- `Property` — a property with bills (type: residence, rental_longterm, rental_vacation, land, personal)
 - `FundingAccount` — a checking/savings account
 - `BillFilterConfig` — glob patterns for filtering Monarch categories
 - `BudgetScopeConfig` — which categories count toward cash flow
@@ -126,19 +130,18 @@ claude/plugin/
 ├── .mcp.json                # mcpServers.manager → bills-mcp
 ├── skills/
 │   ├── check/
-│   │   └── SKILL.md         # 5-phase cross-reference workflow
+│   │   └── SKILL.md         # 3-phase: load → reconcile → report
 │   └── explain/
 │       └── SKILL.md         # CC balance segment walkthrough
 ```
 
 ### Skill: check
 
-Five phases:
-1. **Load** — config expectations + Monarch actuals in parallel
-2. **Cross-reference** — match expected bills to recurring streams, assess payment status
-3. **Investigate** — deeper transaction queries for gaps and anomalies
-4. **Summary** — prioritized findings (overdue → promo deadlines → due soon → gaps → all clear)
-5. **Resolution** — update config with user-provided info
+Four phases:
+1. **Load** — call `list_recurring` + `list_accounts` from monarch-access, load config from bills-mcp (parallel, read-only)
+2. **Reconcile** — link config entries to Monarch entities by ID, classify unmatched streams, persist decisions to config (interactive, skipped if already linked)
+3. **Report** — call `build_bill_inventory` with Monarch data, present alerts + sections + accountability (deterministic, no fuzzy matching)
+4. **Triage & Fix** — walk user through fixing problems surfaced by the report: overdue items, stale streams, merchant splits, wrong categories, disconnected accounts (uses monarch-access tools)
 
 ### Skill: explain
 

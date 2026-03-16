@@ -73,6 +73,8 @@ def update_credit_account(
     *,
     name: Optional[str] = None,
     issuer: Optional[str] = None,
+    monarch_account_id: Optional[str] = None,
+    monarch_merchant_id: Optional[str] = None,
     due_day: Optional[int] = None,
     payment_method: Optional[str] = None,
     funding_account: Optional[str] = None,
@@ -92,6 +94,10 @@ def update_credit_account(
                 acct.name = name
             if issuer is not None:
                 acct.issuer = issuer
+            if monarch_account_id is not None:
+                acct.monarch_account_id = monarch_account_id
+            if monarch_merchant_id is not None:
+                acct.monarch_merchant_id = monarch_merchant_id
             if due_day is not None:
                 acct.due_day = due_day
             if payment_method is not None:

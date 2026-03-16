@@ -53,6 +53,12 @@ class CreditAccount(BaseModel):
     name: str = Field(description="Display name, e.g. 'Best Buy', 'Sapphire Preferred'")
     last4: Optional[str] = Field(default=None, description="Last 4 digits of account number")
     issuer: str = Field(description="Card issuer/servicer, e.g. 'Citi', 'Chase', 'Synchrony'")
+    monarch_account_id: Optional[str] = Field(
+        default=None, description="Monarch account ID for balance/credential lookups"
+    )
+    monarch_merchant_id: Optional[str] = Field(
+        default=None, description="Monarch merchant ID for the payment recurring stream"
+    )
     vendor: bool = Field(
         default=False,
         description="True for vendor/store financing (Best Buy, CareCredit) - typically used for promo financing",
@@ -74,6 +80,9 @@ class PropertyBill(BaseModel):
 
     name: str = Field(description="Bill type, e.g. 'Mortgage', 'Water', 'Trash'")
     vendor: str = Field(description="Vendor name, e.g. 'Mortgage Company', 'City Water Dept'")
+    monarch_merchant_id: Optional[str] = Field(
+        default=None, description="Monarch merchant ID for deterministic stream lookup"
+    )
     due_day: Optional[int] = Field(default=None, description="Day of month due (1-31)")
     amount: Optional[float] = Field(default=None, description="Expected amount")
     payment_method: str = Field(
@@ -95,7 +104,7 @@ class Property(BaseModel):
     name: str = Field(description="Property name, e.g. 'Primary Residence', 'Rental 1'")
     type: str = Field(
         default="residence",
-        description="Type: residence, rental, personal",
+        description="Type: residence, rental_longterm, rental_vacation, land, personal",
     )
     address: Optional[str] = Field(default=None, description="Property address")
     tax_id: Optional[str] = Field(default=None, description="Property tax ID or parcel number")
@@ -122,6 +131,14 @@ class BudgetScopeConfig(BaseModel):
     subscriptions: bool = Field(default=True, description="Include subscriptions")
 
 
+class IgnoredMerchant(BaseModel):
+    """A Monarch merchant explicitly classified as ignorable."""
+
+    merchant_id: str = Field(description="Monarch merchant ID")
+    name: str = Field(description="Human-readable label (not used for matching)")
+    reason: str = Field(description="Why ignored: subscription_inconsequential, income, transfer, etc.")
+
+
 class BillFilterConfig(BaseModel):
     """Category patterns for filtering Monarch's list_recurring to consequential bills.
 
@@ -143,6 +160,7 @@ class BillsConfig(BaseModel):
     credit_accounts: list[CreditAccount] = Field(default_factory=list)
     properties: list[Property] = Field(default_factory=list)
     funding_accounts: list[FundingAccount] = Field(default_factory=list)
+    ignored_merchants: list[IgnoredMerchant] = Field(default_factory=list)
     budget_scope: BudgetScopeConfig = Field(default_factory=BudgetScopeConfig)
     bill_filters: BillFilterConfig = Field(default_factory=BillFilterConfig)
 
