@@ -217,6 +217,32 @@ sync status. Present findings to the user for a decision.
 
 Do NOT add workarounds or ignore-lists in the bills config.
 
+## Recurring List Hygiene
+
+The Monarch recurring list should be curated so it cleanly reflects real obligations.
+Every stream should fall into one of the three sections (credit accounts, properties,
+personal). If a stream doesn't fit any section, work with the user to resolve it:
+
+- **Is it a real bill?** → Add it to the appropriate config section
+- **Is it a subscription, not a consequential bill?** → Mark inactive in Monarch
+  via `update_recurring(stream_id, status="inactive")`
+- **Is it stale/phantom?** → Investigate and mark inactive or remove
+- **Is the category wrong?** → The user should recategorize in Monarch so it
+  matches (or stops matching) the bill filter patterns
+- **Is the merchant wrong/duplicated?** → See Multi-Stream Merchant Resolution
+
+The goal is a clean recurring list where every item is accounted for. Do NOT
+filter noise at the agent level — fix it at the source in Monarch. The bill_filters
+exist to identify what matters from a clean list, not to compensate for a messy one.
+
+After presenting the bill inventory, if there are recurring streams that don't fit
+any section, list them separately and ask the user how to handle each one:
+
+| Stream | Amount | Category | Suggestion |
+|--------|--------|----------|------------|
+| Gaylord Hotels | $35.63 | Adult Outings | Not a bill — mark inactive? |
+| Urban Air | $46.62 | Family Activities | Not a bill — mark inactive? |
+
 ## Important Notes
 
 - Update config incrementally as you discover info — don't wait until the end
