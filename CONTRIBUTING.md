@@ -157,6 +157,27 @@ When making changes to the plugin (skills, MCP tools, config models):
 4. Commit and push
 5. Reinstall locally: `pipx install --force .`
 
+### Versioning Strategy
+
+- **Minor version** (0.5.0 → 0.6.0): new features, new tools, new config fields, skill rewrites
+- **Patch version** (0.5.0 → 0.5.1): bug fixes, packaging fixes, doc updates, no new functionality
+
+### Packaging Non-Python Files
+
+Data files shipped with the package (e.g., `defaults.yaml`) must be declared in `pyproject.toml`:
+
+```toml
+[tool.setuptools.package-data]
+"bills.sdk.common" = ["defaults.yaml"]
+```
+
+Without this, `pipx install` won't include them and the installed `bills-mcp` will crash at runtime with `FileNotFoundError`. Always verify after adding new data files:
+
+```bash
+pipx install --force .
+ls $(python -c "import bills.sdk.common; print(bills.sdk.common.__path__[0])")/defaults.yaml
+```
+
 ## Testing
 
 - `python -m pytest tests/` runs all unit tests
