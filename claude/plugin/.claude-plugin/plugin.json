@@ -1,0 +1,5 @@
+{
+  "name": "bills",
+  "description": "Bill tracking with Monarch recurring cross-reference, promo deadline monitoring, and balance explanation",
+  "version": "0.2.0"
+}

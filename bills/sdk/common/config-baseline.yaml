@@ -1,0 +1,48 @@
+# Baseline config with default settings
+# Copy to ~/.config/bills/config.yaml and add your accounts/bills
+version: 1
+
+# Budget scope: which expenses count toward cash flow calculations
+# (does NOT affect bill monitoring - all bills are checked for delinquency)
+budget_scope:
+  properties_residence: true   # include primary residence bills
+  properties_rental: false     # exclude rental property bills (separate business)
+  credit: true                 # include credit account payments
+  subscriptions: true          # include subscription expenses
+
+# Credit accounts: bank cards and vendor/store financing
+# Example entry (remove and add your own):
+credit_accounts: []
+#  - name: "Example Card"
+#    last4: "1234"
+#    issuer: "Example Bank"
+#    vendor: false              # true for store financing (Best Buy, CareCredit)
+#    due_day: 15                # day of month payment due
+#    payment_method: "manual"   # auto_pay_full, auto_pay_min, manual
+#    funding_account: "5678"    # last4 of checking account that pays this
+#    # Promo financing fields (for 0% offers):
+#    # promo_balance: 1000.00
+#    # promo_expires: "2026-06-14"
+#    # payment_amount: 200.00
+#    # payment_frequency: "monthly"
+
+# Funding accounts: checking/savings used to pay bills
+funding_accounts: []
+#  - name: "Example Checking"
+#    last4: "5678"
+#    bank: "Example Bank"
+#    monarch_id: null           # Monarch account ID for balance queries
+
+# Properties and their bills
+properties: []
+#  - name: "Primary Residence"
+#    property_type: "primary"   # primary, rental_longterm, rental_vacation
+#    address: null
+#    bills:
+#      - name: "Mortgage"
+#        vendor: "Example Lender"
+#        due_day: 1
+#        amount: null
+#        payment_method: "auto_draft"
+#        funding_account: "5678"
+#        managed_by: null       # set to "spouse" to reduce tracking noise

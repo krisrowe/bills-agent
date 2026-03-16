@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bills-agent"
+version = "0.1.0"
+description = "Bill management framework for AI agent platforms"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+    "mcp>=1.0.0",
+    "pydantic>=2.0.0",
+    "click>=8.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-timeout>=2.0.0",
+]
+
+[project.scripts]
+bills = "bills.cli:main"
+bills-mcp = "bills.mcp.server:run_server"
+bills-report = "bills.cli:report"
+
+[project.urls]
+Homepage = "https://github.com/krisrowe/bills-agent"
+Repository = "https://github.com/krisrowe/bills-agent"
+
+[tool.setuptools.packages.find]
+include = ["bills*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

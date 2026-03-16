@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "manager": {
+      "command": "bills-mcp"
+    }
+  }
+}
