@@ -158,6 +158,26 @@ All user data lives at `~/.config/bills/config.yaml`. The repo contains no perso
 - `validate_config` — verify config and return summary
 - `show_config_path` — show config file location
 
+## Updating
+
+When a new version is released:
+
+```bash
+# 1. Update the package (gets latest bills-mcp)
+pipx install --force git+https://github.com/krisrowe/bills-agent.git
+
+# 2. Update the marketplace
+claude plugin marketplace update productivity
+
+# 3. Update the plugin
+claude plugin update bills@productivity
+
+# 4. Restart Claude Code
+# IMPORTANT: /reload-plugins is not sufficient for version changes.
+# You must exit Claude Code and start a new session for the updated
+# plugin to take effect. The old version remains cached until restart.
+```
+
 ## Development
 
 ```bash
