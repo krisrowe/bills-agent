@@ -22,6 +22,7 @@ This skill uses tools from **two MCP servers**:
 - `list_recurring` — Monarch's detected recurring streams with last_paid_date, due_date, amount
 - `list_transactions` — transaction history for deeper investigation
 - `list_accounts` — account balances and sync status
+- `update_recurring` — deactivate or remove stale streams
 
 ## Processing Phases
 
@@ -146,8 +147,6 @@ After all sections, summarize:
 - Number of untracked discoveries (in Monarch but not in config)
 - Action items for the user
 
-For flagged items, ask user for clarification (payment method, missing config, etc.)
-
 ### Phase 5: Resolution
 
 After user provides input:
@@ -196,56 +195,40 @@ merchant, OR transactions from the same merchant post to multiple accounts with 
 4. **Copy logo**: Use `setMerchantLogo` to copy the original merchant's cloudinary logo ID
 5. **Deactivate original**: Use `update_recurring(stream_id, status="inactive")` on the original
 
-**Example:** "State Farm" paying auto from checking, home from joint, rental from property account
-→ Split into "State Farm (Auto)", "State Farm (Home)", "State Farm (Rental)" with correct amounts.
-
-## Stale Merchant Detection
-
-When a recurring stream has `last_paid_date` older than 4 months or null:
-- The obligation may be closed/paid off
-- The merchant name may have changed (vendor acquisition, rebranding)
-- The loan may have transferred to a new servicer
-- The account credential may be disconnected
-
-**Do not assume — investigate.** Search transactions for the account for similar amounts,
-check for new merchants appearing around the time the old one stopped, and check account
-sync status. Present findings to the user for a decision.
-
-**Fix the source, not the filter.** If a stream is stale, guide the user to either:
-- Mark it inactive via `update_recurring(stream_id, status="inactive")` (reversible)
-- Remove it via `update_recurring(stream_id, status="removed")` (permanent)
-
-Do NOT add workarounds or ignore-lists in the bills config.
-
 ## Recurring List Hygiene
 
-The Monarch recurring list should be curated so it cleanly reflects real obligations.
-Every stream should fall into one of the three sections (credit accounts, properties,
-personal). If a stream doesn't fit any section, work with the user to resolve it:
+**Principle: fix the source, not the filter.** The Monarch recurring list should be curated
+so it cleanly reflects real obligations. The bill_filters exist to identify what matters
+from a clean list, not to compensate for a messy one.
 
-- **Is it a real bill?** → Add it to the appropriate config section
-- **Is it a subscription, not a consequential bill?** → Mark inactive in Monarch
-  via `update_recurring(stream_id, status="inactive")`
-- **Is it stale/phantom?** → Investigate and mark inactive or remove
-- **Is the category wrong?** → The user should recategorize in Monarch so it
-  matches (or stops matching) the bill filter patterns
-- **Is the merchant wrong/duplicated?** → See Multi-Stream Merchant Resolution
-
-The goal is a clean recurring list where every item is accounted for. Do NOT
-filter noise at the agent level — fix it at the source in Monarch. The bill_filters
-exist to identify what matters from a clean list, not to compensate for a messy one.
-
-After presenting the bill inventory, if there are recurring streams that don't fit
-any section, list them separately and ask the user how to handle each one:
+Every recurring stream should fall into one of the three output sections (credit accounts,
+properties, personal). After presenting the bill inventory, list any streams that don't fit
+and help the user resolve each one:
 
 | Stream | Amount | Category | Suggestion |
 |--------|--------|----------|------------|
-| Gaylord Hotels | $35.63 | Adult Outings | Not a bill — mark inactive? |
-| Urban Air | $46.62 | Family Activities | Not a bill — mark inactive? |
+
+**Resolution options:**
+- **Real bill not yet tracked** → Add to config (register_property_bill, register_credit_account)
+- **Subscription, not a consequential bill** → Mark inactive: `update_recurring(stream_id, status="inactive")`
+- **Stale/phantom stream** → Investigate first (see below), then mark inactive or remove
+- **Wrong category** → User recategorizes in Monarch so it matches or stops matching bill filters
+- **Merchant wrong/duplicated** → See Multi-Stream Merchant Resolution above
+
+**Investigating stale streams** (last_paid_date > 4 months ago or null):
+
+Do not assume a stale stream is dead. It could be:
+- Closed/paid off
+- Merchant name changed (vendor acquisition, rebranding)
+- Loan transferred to a new servicer
+- Account credential disconnected (check `credential.updateRequired`)
+
+Search transactions for the account for similar amounts. Check for new merchants appearing
+around the time the old one stopped. Present findings to the user, then:
+- Mark inactive via `update_recurring(stream_id, status="inactive")` (reversible)
+- Remove via `update_recurring(stream_id, status="removed")` (permanent, removes all streams for merchant)
 
 ## Important Notes
 
 - Update config incrementally as you discover info — don't wait until the end
-- If a bill isn't in config but should be tracked, use register tools to add it
-- If a recurring stream isn't in config, suggest adding it or adding a filter pattern
 - Some credit cards may not be in Monarch (store cards, new cards) — check email
