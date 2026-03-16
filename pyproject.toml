@@ -35,6 +35,9 @@ Repository = "https://github.com/krisrowe/bills-agent"
 [tool.setuptools.packages.find]
 include = ["bills*"]
 
+[tool.setuptools.package-data]
+"bills.sdk.common" = ["defaults.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
