@@ -120,3 +120,55 @@ def register_property_bill(
     config.properties[prop_idx] = prop
     save_config(config)
     return True, new_bill
+
+
+def update_property_bill(
+    property_name: str,
+    bill_name: str,
+    *,
+    vendor: Optional[str] = None,
+    monarch_merchant_id: Optional[str] = None,
+    due_day: Optional[int] = None,
+    amount: Optional[float] = None,
+    payment_method: Optional[str] = None,
+    funding_account: Optional[str] = None,
+    managed_by: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> tuple[bool, str | PropertyBill]:
+    """Update an existing property bill.
+
+    Returns (success, bill_or_error).
+    Only provided fields are changed.
+    """
+    config = load_config()
+
+    for i, prop in enumerate(config.properties):
+        if prop.name.lower() != property_name.lower():
+            continue
+        for j, bill in enumerate(prop.bills):
+            if bill.name.lower() != bill_name.lower():
+                continue
+
+            if vendor is not None:
+                bill.vendor = vendor
+            if monarch_merchant_id is not None:
+                bill.monarch_merchant_id = monarch_merchant_id
+            if due_day is not None:
+                bill.due_day = due_day
+            if amount is not None:
+                bill.amount = amount
+            if payment_method is not None:
+                bill.payment_method = payment_method
+            if funding_account is not None:
+                bill.funding_account = funding_account
+            if managed_by is not None:
+                bill.managed_by = managed_by
+            if notes is not None:
+                bill.notes = notes
+
+            prop.bills[j] = bill
+            config.properties[i] = prop
+            save_config(config)
+            return True, bill
+
+    return False, f"No bill '{bill_name}' on property '{property_name}'"

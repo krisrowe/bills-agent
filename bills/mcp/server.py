@@ -26,8 +26,9 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from ..sdk.common import accounts, budget, filters, properties
+from ..sdk.common import accounts, budget, filters, ignored, properties
 from ..sdk.common.config import get_config_path, load_config
+from ..sdk.common.inventory import build_bill_inventory, load_defaults
 
 mcp = FastMCP("bills")
 
@@ -151,6 +152,8 @@ async def update_credit_account_tool(
     last4: str = Field(description="Last 4 digits to identify the account"),
     name: Optional[str] = Field(default=None, description="New display name"),
     issuer: Optional[str] = Field(default=None, description="New issuer"),
+    monarch_account_id: Optional[str] = Field(default=None, description="Monarch account ID (for balance/credential)"),
+    monarch_merchant_id: Optional[str] = Field(default=None, description="Monarch merchant ID (for payment stream)"),
     due_day: Optional[int] = Field(default=None, description="Day of month due (1-31)"),
     payment_method: Optional[str] = Field(default=None, description="auto_pay_full, auto_pay_min, manual"),
     funding_account: Optional[str] = Field(default=None, description="Last4 of funding account"),
@@ -161,6 +164,8 @@ async def update_credit_account_tool(
         last4,
         name=name,
         issuer=issuer,
+        monarch_account_id=monarch_account_id,
+        monarch_merchant_id=monarch_merchant_id,
         due_day=due_day,
         payment_method=payment_method,
         funding_account=funding_account,
@@ -469,6 +474,45 @@ async def register_property_bill_tool(
 
 
 @mcp.tool(
+    name="update_property_bill",
+    description="""Update an existing property bill.
+
+Use during reconciliation to link a bill to its Monarch merchant:
+- Set monarch_merchant_id after confirming the match with the user
+- Update vendor, due_day, amount, payment_method as discovered
+
+Only fields you provide are updated — others remain unchanged.""",
+)
+async def update_property_bill_tool(
+    property_name: str = Field(description="Property name containing the bill"),
+    bill_name: str = Field(description="Bill name to update (e.g. 'Mortgage', 'Water')"),
+    vendor: Optional[str] = Field(default=None, description="Vendor name"),
+    monarch_merchant_id: Optional[str] = Field(default=None, description="Monarch merchant ID for deterministic stream lookup"),
+    due_day: Optional[int] = Field(default=None, description="Day of month due (1-31)"),
+    amount: Optional[float] = Field(default=None, description="Expected amount"),
+    payment_method: Optional[str] = Field(default=None, description="auto_draft, auto_pay, manual"),
+    funding_account: Optional[str] = Field(default=None, description="Last4 of funding account"),
+    managed_by: Optional[str] = Field(default=None, description="Who manages this bill"),
+    notes: Optional[str] = Field(default=None, description="Bill-specific notes"),
+) -> dict:
+    success, result = properties.update_property_bill(
+        property_name,
+        bill_name,
+        vendor=vendor,
+        monarch_merchant_id=monarch_merchant_id,
+        due_day=due_day,
+        amount=amount,
+        payment_method=payment_method,
+        funding_account=funding_account,
+        managed_by=managed_by,
+        notes=notes,
+    )
+    if success:
+        return {"success": True, "property": property_name, "bill": result.model_dump()}
+    return {"success": False, "error": result}
+
+
+@mcp.tool(
     name="update_property",
     description="""Update property metadata (address, type, tax_id, notes).
 
@@ -617,6 +661,122 @@ async def remove_bill_filter_tool(
 ) -> dict:
     success, message = filters.remove_bill_filter(pattern)
     return {"success": success, "message": message}
+
+
+# =============================================================================
+# Ignored Merchant Tools
+# =============================================================================
+
+
+@mcp.tool(
+    name="list_ignored_merchants",
+    description="""List all explicitly ignored merchants.
+
+These are Monarch merchants the user has classified as "don't care" during
+reconciliation. Each has a merchant_id, human-readable name, and reason.""",
+)
+async def list_ignored_merchants_tool() -> dict:
+    merchants = ignored.list_ignored_merchants()
+    return {"ignored_merchants": [m.model_dump() for m in merchants], "count": len(merchants)}
+
+
+@mcp.tool(
+    name="add_ignored_merchant",
+    description="""Add a Monarch merchant to the ignored list.
+
+Use during reconciliation when the user says a recurring stream is not a
+consequential bill (subscription, one-time, etc.).
+
+Required: merchant_id, name, reason
+Reasons: subscription_inconsequential, income, transfer, other""",
+)
+async def add_ignored_merchant_tool(
+    merchant_id: str = Field(description="Monarch merchant ID"),
+    name: str = Field(description="Human-readable merchant name"),
+    reason: str = Field(description="Why ignored: subscription_inconsequential, income, transfer, other"),
+) -> dict:
+    success, result = ignored.add_ignored_merchant(
+        merchant_id=merchant_id, name=name, reason=reason,
+    )
+    if success:
+        return {"success": True, "ignored_merchant": result.model_dump()}
+    return {"success": False, "error": result}
+
+
+@mcp.tool(
+    name="remove_ignored_merchant",
+    description="""Remove a merchant from the ignored list.
+
+Use when a previously ignored merchant should now be tracked (e.g., user
+realizes it's actually a consequential bill).""",
+)
+async def remove_ignored_merchant_tool(
+    merchant_id: str = Field(description="Monarch merchant ID to un-ignore"),
+) -> dict:
+    success, message = ignored.remove_ignored_merchant(merchant_id)
+    return {"success": success, "message": message}
+
+
+# =============================================================================
+# Inventory Tool
+# =============================================================================
+
+
+@mcp.tool(
+    name="build_bill_inventory",
+    description="""Build a complete bill inventory by cross-referencing config expectations
+against Monarch recurring streams. Matching is deterministic by ID — no fuzzy logic.
+
+Joins three data sources:
+1. Framework templates — expected bills per property type (built-in)
+2. Config declarations — user-declared bills, credit accounts, Monarch ID links
+3. Monarch recurring streams — live detected recurring transactions
+
+Every item from every source appears exactly once. Nothing is silently dropped.
+Accountability totals must balance or the tool returns an error.
+
+INPUTS:
+- recurring_streams: array from monarch-access list_recurring
+- accounts: array from monarch-access list_accounts
+
+OUTPUT:
+- accountability: grouped totals that must sum (monarch_streams breakdown + config_expectations breakdown)
+- alerts: overdue items, promo deadlines (<90 days), disconnected accounts
+- sections: credit_accounts, properties (by name), personal, ignored, unclassified
+
+Each item has:
+- obligation: what it is (name, section, property, bill_type)
+- evidence: where we learned about it (framework, config, monarch — each nullable)
+- disposition: tracked / ignored / unclassified
+- payment_status: paid / due_soon / overdue / gap / disconnected / unknown
+
+PREREQUISITE: Config entries should have monarch_merchant_id and monarch_account_id
+linked during reconciliation. Without these links, items show as gaps.
+
+WORKFLOW:
+1. Call list_recurring and list_accounts from monarch-access
+2. Call this tool with those results
+3. Present alerts first, then sections, then accountability
+4. For unclassified items, use reconciliation tools to classify, then call again""",
+)
+async def build_bill_inventory_tool(
+    recurring_streams: list[dict] = Field(
+        description="Array from monarch-access list_recurring"
+    ),
+    accounts: list[dict] = Field(
+        default_factory=list,
+        description="Array from monarch-access list_accounts",
+    ),
+) -> dict:
+    config = load_config()
+    defaults = load_defaults()
+    result = build_bill_inventory(
+        config=config,
+        recurring_streams=recurring_streams,
+        accounts=accounts,
+        defaults=defaults,
+    )
+    return result.model_dump()
 
 
 # =============================================================================
