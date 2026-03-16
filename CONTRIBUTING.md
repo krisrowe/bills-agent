@@ -144,6 +144,16 @@ Five phases:
 
 Walks through a credit card's transaction history in segments (between payments/statement dates), showing large charges individually and small charges summarized, with running balance reconciliation.
 
+## Releasing Changes
+
+When making changes to the plugin (skills, MCP tools, config models):
+
+1. Make your code changes
+2. Run tests: `python -m pytest tests/`
+3. **Bump the version** in `claude/plugin/.claude-plugin/plugin.json` — Claude Code uses this to detect updates. If you don't bump it, users running `claude plugin update` won't see your changes.
+4. Commit and push
+5. Reinstall locally: `pipx install --force .`
+
 ## Testing
 
 - `python -m pytest tests/` runs all unit tests
@@ -172,3 +182,18 @@ Neither config nor Monarch alone tells the full story. Config without Monarch ca
 ### Properties Define Minimum Bill Sets
 
 If you own a property, you expect certain bills (mortgage, water, electric, trash, insurance). If one stops showing up in Monarch, that's a signal — not something to ignore. Property declarations are the "minimum viable bill set" for each property.
+
+## Future Enhancements
+
+### CLI-Driven Project Install
+
+A `bills install` (or `bills setup`) CLI command that bootstraps a Claude Code project for bill checking:
+
+1. **Verify prerequisites** — check that `monarch-access` is installed and accessible (e.g., `which monarch-mcp` or test MCP connectivity). If missing, offer to install it locally as stdio given a Monarch token.
+2. **Install/update the plugin** — run the Claude Code plugin install commands (`claude plugin marketplace add`, `claude plugin install`) or reinstall the latest version into the project at CWD.
+3. **Configure safe tool permissions** — add read-only tools from both `bills-mcp` and `monarch-access` to the project's `.claude/settings.json` allow-list so Phase 1 data loading doesn't require per-tool approval. Tools to auto-allow:
+   - `mcp__plugin_bills_manager__list_*`, `get_*`, `show_*`, `validate_*`
+   - `mcp__monarch-access__list_*`, `get_*`
+4. **Validate config** — run `validate_config` and report any issues with the user's `~/.config/bills/config.yaml`.
+
+This reduces the friction of first-time setup and ensures consistent configuration across projects that use the bill checking workflow.
