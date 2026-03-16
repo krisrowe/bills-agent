@@ -70,13 +70,41 @@ For spouse-managed bills (`managed_by` set):
 
 ### Phase 4: Summary & Triage
 
-Present findings grouped by urgency:
+First present any **ALERTS** (overdue, promo deadlines, disconnected accounts).
 
-1. **OVERDUE** — past due with no payment found
-2. **PROMO DEADLINES** — approaching expiration (<90 days)
-3. **DUE SOON** — due within 7 days, not yet paid
-4. **GAPS** — expected bills not found in Monarch, or Monarch bills not in config
-5. **ALL CLEAR** — count of bills verified current
+Then present the **complete bill inventory** organized by entity. Each entity gets a numbered
+list so the user can easily see whether everything is accounted for.
+
+**Entity types (in order):**
+1. Each property from config (primary residence, each rental, etc.)
+2. Credit Accounts — all credit cards, store cards, and lines of credit
+3. Personal — non-property bills (phone, insurance, child support)
+
+**For each entity, show a numbered table with columns:**
+
+| # | Bill | Vendor | Day Due | Amount | Method | Last Paid | Status |
+|---|------|--------|---------|--------|--------|-----------|--------|
+
+Where:
+- **#** — sequential number within the entity (so user can count and verify completeness)
+- **Bill** — bill name from config, or merchant name from Monarch if untracked
+- **Vendor** — merchant/vendor name
+- **Day Due** — day of month from config `due_day` OR from Monarch `due_date` (extract day)
+- **Amount** — expected from config or actual from Monarch recurring
+- **Method** — payment method from config (auto_draft, auto_pay_full, manual, etc.)
+- **Last Paid** — date from Monarch `last_paid_date`
+- **Status** — ✅ Current, ⚠️ Due Soon, ❌ Overdue, ❓ Unknown, 🔌 Disconnected, 👤 Spouse
+
+**For Credit Accounts specifically**, show:
+- One row per account from config
+- Day Due = `due_day` from config
+- Amount = current balance from Monarch `list_accounts`
+- Method = `payment_method` from config
+- Status = based on whether autopay is configured and account is syncing
+
+**After the inventory tables**, show:
+- **GAPS** — expected bills not found in Monarch, or Monarch bills not in any entity
+- **PROMO DEADLINES** — if any are within 90 days
 
 For flagged items, ask user for clarification (payment method, missing config, etc.)
 
