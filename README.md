@@ -178,6 +178,10 @@ claude plugin update bills@productivity
 # plugin to take effect. The old version remains cached until restart.
 ```
 
+**Note:** `claude plugin update` only detects changes if the `version` field in
+`claude/plugin/.claude-plugin/plugin.json` has been incremented. If the version
+hasn't changed, Claude Code treats the plugin as up-to-date and skips the update.
+
 ## Development
 
 ```bash
