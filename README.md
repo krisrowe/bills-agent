@@ -40,7 +40,7 @@ Add the marketplace and install the plugin:
 
 ```bash
 claude plugin marketplace add krisrowe/claude-plugins
-claude plugin install bills@krisrowe-tools --scope user
+claude plugin install bills@productivity --scope user
 ```
 
 Or for development, load directly:
