@@ -139,12 +139,21 @@ class ConfigExpectationsAccountability(BaseModel):
     gap: int = 0
 
 
+class MonarchAccountsAccountability(BaseModel):
+    total: int = 0
+    linked_to_config: int = 0
+    not_in_config: int = 0
+
+
 class Accountability(BaseModel):
     monarch_streams: MonarchStreamAccountability = Field(
         default_factory=MonarchStreamAccountability
     )
     config_expectations: ConfigExpectationsAccountability = Field(
         default_factory=ConfigExpectationsAccountability
+    )
+    monarch_accounts: MonarchAccountsAccountability = Field(
+        default_factory=MonarchAccountsAccountability
     )
 
 
@@ -165,6 +174,15 @@ class BillInventory(BaseModel):
     accountability: Accountability = Field(default_factory=Accountability)
     alerts: list[Alert] = Field(default_factory=list)
     sections: InventorySections = Field(default_factory=InventorySections)
+
+
+class InventoryManifest(BaseModel):
+    """Returned by build_bill_inventory MCP tool — summary only, not full items."""
+
+    inventory_hash: str
+    accountability: Accountability
+    alerts: list[Alert] = Field(default_factory=list)
+    sections: list[str] = Field(default_factory=list)
 
 
 class InventoryAccountabilityError(Exception):
@@ -362,6 +380,19 @@ def build_bill_inventory(
 
         return _compute_payment_status(best, today), evidence
 
+    # Track which Monarch account IDs are claimed by config credit accounts
+    claimed_monarch_account_ids: set[str] = set()
+
+    # Build last4-to-Monarch-credit-account index for auto-matching
+    monarch_credit_by_mask: dict[str, list[dict]] = {}
+    for acct in accounts:
+        acct_type = (acct.get("type") or {}).get("name", "")
+        if acct_type != "credit":
+            continue
+        mask = acct.get("mask", "")
+        if mask:
+            monarch_credit_by_mask.setdefault(mask, []).append(acct)
+
     # ------------------------------------------------------------------
     # Step 1+2: Framework slots + config bills, matched by ID
     # ------------------------------------------------------------------
@@ -468,7 +499,7 @@ def build_bill_inventory(
             items.append(item)
 
     # ------------------------------------------------------------------
-    # Step 3: Credit accounts
+    # Step 3: Config credit accounts
     # ------------------------------------------------------------------
 
     for ca in config.credit_accounts:
@@ -487,16 +518,28 @@ def build_bill_inventory(
         else:
             acct_config_gap += 1
 
-        # Account info by monarch_account_id
+        # Account info by monarch_account_id, with last4 auto-match fallback
         monarch_acct = None
-        if ca.monarch_account_id:
+        matched_account_id = ca.monarch_account_id
+
+        if matched_account_id:
+            # Explicit ID link
             for acct in accounts:
-                if str(acct.get("id", "")) == ca.monarch_account_id:
+                if str(acct.get("id", "")) == matched_account_id:
                     monarch_acct = acct
                     break
+        elif ca.last4:
+            # Auto-match by last4/mask on credit-type accounts
+            candidates = monarch_credit_by_mask.get(ca.last4, [])
+            if len(candidates) == 1:
+                monarch_acct = candidates[0]
+                matched_account_id = str(monarch_acct.get("id", ""))
+
+        if matched_account_id:
+            claimed_monarch_account_ids.add(matched_account_id)
 
         # Override payment status if account is disconnected
-        if ca.monarch_account_id and ca.monarch_account_id in disconnected_account_ids:
+        if matched_account_id and matched_account_id in disconnected_account_ids:
             payment = PaymentStatus(status="disconnected")
 
         # Build monarch evidence — prefer stream evidence, supplement with account
@@ -504,6 +547,7 @@ def build_bill_inventory(
             monarch_ev = MonarchEvidence(
                 account=monarch_acct.get("displayName"),
                 account_id=str(monarch_acct.get("id", "")),
+                amount=monarch_acct.get("currentBalance"),
             )
 
         item = BillItem(
@@ -524,6 +568,45 @@ def build_bill_inventory(
             payment_status=payment,
         )
         items.append(item)
+
+    # ------------------------------------------------------------------
+    # Step 3b: Monarch credit accounts not in config
+    # ------------------------------------------------------------------
+
+    acct_monarch_accounts_linked = len(claimed_monarch_account_ids)
+    acct_monarch_accounts_not_in_config = 0
+
+    for acct in accounts:
+        acct_type = (acct.get("type") or {}).get("name", "")
+        if acct_type != "credit":
+            continue
+        acct_id = str(acct.get("id", ""))
+        if acct_id in claimed_monarch_account_ids:
+            continue
+
+        # This Monarch credit account has no config entry
+        acct_monarch_accounts_not_in_config += 1
+        display = acct.get("displayName", "Unknown")
+        balance = acct.get("currentBalance")
+
+        disconnected = acct_id in disconnected_account_ids
+        ps = PaymentStatus(status="disconnected") if disconnected else PaymentStatus(status="unknown")
+
+        items.append(BillItem(
+            obligation=Obligation(
+                name=display,
+                section="credit_account",
+            ),
+            evidence=Evidence(
+                monarch=MonarchEvidence(
+                    account=display,
+                    account_id=acct_id,
+                    amount=balance,
+                ),
+            ),
+            disposition="unclassified",
+            payment_status=ps,
+        ))
 
     # ------------------------------------------------------------------
     # Step 4: Classify remaining Monarch streams
@@ -669,6 +752,11 @@ def build_bill_inventory(
             f"({expected_config} config entries + {framework_only_count} framework-only slots)"
         )
 
+    # Monarch accounts accountability
+    total_monarch_credit_accounts = sum(
+        1 for a in accounts if (a.get("type") or {}).get("name") == "credit"
+    )
+
     accountability = Accountability(
         monarch_streams=MonarchStreamAccountability(
             total=total_streams,
@@ -683,6 +771,11 @@ def build_bill_inventory(
             total=expected_total_expectations,
             linked_to_monarch=acct_config_linked,
             gap=acct_config_gap,
+        ),
+        monarch_accounts=MonarchAccountsAccountability(
+            total=total_monarch_credit_accounts,
+            linked_to_config=acct_monarch_accounts_linked,
+            not_in_config=acct_monarch_accounts_not_in_config,
         ),
     )
 

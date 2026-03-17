@@ -26,8 +26,11 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
+import hashlib
+import json as json_mod
+
 from ..sdk.common import accounts, budget, filters, ignored, properties
-from ..sdk.common.config import get_config_path, load_config
+from ..sdk.common.config import get_config_path, get_data_dir, load_config
 from ..sdk.common.inventory import build_bill_inventory, load_defaults
 
 mcp = FastMCP("bills")
@@ -718,46 +721,48 @@ async def remove_ignored_merchant_tool(
 
 
 # =============================================================================
-# Inventory Tool
+# Inventory Tools
 # =============================================================================
+
+
+def _inventory_cache_path():
+    """Path to cached inventory JSON."""
+    return get_data_dir() / "inventory.json"
 
 
 @mcp.tool(
     name="build_bill_inventory",
-    description="""Build a complete bill inventory by cross-referencing config expectations
-against Monarch recurring streams. Matching is deterministic by ID — no fuzzy logic.
+    description="""Build a complete bill inventory and return a manifest with alerts and accountability.
 
-Joins three data sources:
-1. Framework templates — expected bills per property type (built-in)
-2. Config declarations — user-declared bills, credit accounts, Monarch ID links
-3. Monarch recurring streams — live detected recurring transactions
-
-Every item from every source appears exactly once. Nothing is silently dropped.
-Accountability totals must balance or the tool returns an error.
+This is the FIRST tool to call after loading Monarch data. It cross-references config
+expectations against Monarch recurring streams using deterministic ID-based matching.
+The full inventory is cached to disk — use get_inventory_section to fetch individual
+sections for review.
 
 INPUTS:
-- recurring_streams: array from monarch-access list_recurring
-- accounts: array from monarch-access list_accounts
+- recurring_streams: full array from monarch-access list_recurring
+- accounts: full array from monarch-access list_accounts
 
-OUTPUT:
-- accountability: grouped totals that must sum (monarch_streams breakdown + config_expectations breakdown)
-- alerts: overdue items, promo deadlines (<90 days), disconnected accounts
-- sections: credit_accounts, properties (by name), personal, ignored, unclassified
-
-Each item has:
-- obligation: what it is (name, section, property, bill_type)
-- evidence: where we learned about it (framework, config, monarch — each nullable)
-- disposition: tracked / ignored / unclassified
-- payment_status: paid / due_soon / overdue / gap / disconnected / unknown
-
-PREREQUISITE: Config entries should have monarch_merchant_id and monarch_account_id
-linked during reconciliation. Without these links, items show as gaps.
+RETURNS (small response — manifest only, not full items):
+- inventory_hash: pass this to get_inventory_section to prevent stale reads
+- accountability: grouped totals proving every stream and config entry is accounted for
+  - monarch_streams: total + breakdown (matched_to_config, matched_to_credit_accounts,
+    matched_by_bill_filter, ignored_by_pattern, ignored_by_merchant_list, unclassified)
+  - config_expectations: total + breakdown (linked_to_monarch, gap)
+  - monarch_accounts: total + breakdown (linked_to_config, not_in_config)
+- alerts: URGENT items needing immediate attention
+  - overdue: bills past due with no payment found
+  - promo_critical: deferred interest deadlines within 90 days
+  - disconnected: account credentials need refresh
+- sections: list of available section names to fetch via get_inventory_section
 
 WORKFLOW:
-1. Call list_recurring and list_accounts from monarch-access
+1. Call list_recurring and list_accounts from monarch-access (parallel)
 2. Call this tool with those results
-3. Present alerts first, then sections, then accountability
-4. For unclassified items, use reconciliation tools to classify, then call again""",
+3. Present ALERTS to user first — these need immediate attention
+4. Present ACCOUNTABILITY so user sees the big picture
+5. Call get_inventory_section for each section to review one at a time
+6. For items needing reconciliation, use update tools to link/classify, then rebuild""",
 )
 async def build_bill_inventory_tool(
     recurring_streams: list[dict] = Field(
@@ -776,7 +781,154 @@ async def build_bill_inventory_tool(
         accounts=accounts,
         defaults=defaults,
     )
-    return result.model_dump()
+
+    # Cache full result to disk
+    cache_path = _inventory_cache_path()
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    result_json = json_mod.dumps(result.model_dump())
+    cache_path.write_text(result_json)
+
+    # Compute hash for stale guard
+    inventory_hash = hashlib.sha256(result_json.encode()).hexdigest()[:12]
+
+    # Build section list with item counts
+    section_list = []
+    if result.sections.credit_accounts:
+        section_list.append(f"credit_accounts ({len(result.sections.credit_accounts)} items)")
+    for prop_name, prop_sec in result.sections.properties.items():
+        section_list.append(f"property:{prop_name} ({len(prop_sec.items)} items)")
+    if result.sections.personal:
+        section_list.append(f"personal ({len(result.sections.personal)} items)")
+    if result.sections.ignored:
+        section_list.append(f"ignored ({len(result.sections.ignored)} items)")
+    if result.sections.unclassified:
+        section_list.append(f"unclassified ({len(result.sections.unclassified)} items)")
+
+    return {
+        "inventory_hash": inventory_hash,
+        "accountability": result.accountability.model_dump(),
+        "alerts": [a.model_dump() for a in result.alerts],
+        "sections": section_list,
+    }
+
+
+@mcp.tool(
+    name="get_inventory_section",
+    description="""Fetch one section from the cached bill inventory, pre-grouped by source.
+
+Call build_bill_inventory first. Then call this tool for each section.
+
+INPUTS:
+- section: from the sections list in build_bill_inventory response
+- inventory_hash: from build_bill_inventory response (rejects if stale)
+
+RETURNS items pre-grouped into three lists:
+
+"matched" — items that are BOTH declared by the user AND detected in bank data.
+  These have the most complete information: the user's declared details (vendor, due day,
+  payment method) PLUS live bank data (balance, last payment, amount).
+  Present these with full details. Show payment status prominently.
+
+"declared_only" — items the user declared but we could NOT find in bank data.
+  We know what the user expects but can't verify if it's been paid.
+  Could mean: not connected to bank, paid outside tracked accounts, or needs linking.
+  Show what we know from the user's declaration and clearly state we can't verify payment.
+
+"detected_only" — items found in bank data but NOT declared by the user.
+  Bank sees a recurring payment the user hasn't told us about.
+  Could be: a new account, something the user forgot to add, or something to ignore.
+  Show what the bank reports and ask the user what to do with it.
+
+For "ignored" sections: groups are "auto_skipped" (transfers, income detected by
+category pattern) and "manually_skipped" (user previously said to ignore).
+
+For "unclassified" sections: single flat list — all need user decisions.
+
+NEVER use the words "config", "Monarch", "gap", "linked", "evidence", or "disposition"
+when presenting to the user. Use "declared"/"detected"/"matched" and plain language.""",
+)
+async def get_inventory_section_tool(
+    section: str = Field(
+        description="Section to fetch: 'credit_accounts', 'property:<Name>', 'personal', 'ignored', 'unclassified'"
+    ),
+    inventory_hash: str = Field(
+        description="Hash from build_bill_inventory response — prevents stale data"
+    ),
+) -> dict:
+    cache_path = _inventory_cache_path()
+    if not cache_path.exists():
+        return {"error": "No cached inventory. Call build_bill_inventory first."}
+
+    cached_json = cache_path.read_text()
+    current_hash = hashlib.sha256(cached_json.encode()).hexdigest()[:12]
+    if current_hash != inventory_hash:
+        return {"error": f"Inventory expired (hash mismatch: got {inventory_hash}, current {current_hash}). Call build_bill_inventory again."}
+
+    data = json_mod.loads(cached_json)
+    sections_data = data.get("sections", {})
+
+    if section == "credit_accounts":
+        items = sections_data.get("credit_accounts", [])
+    elif section.startswith("property:"):
+        prop_name = section[len("property:"):]
+        prop_sec = sections_data.get("properties", {}).get(prop_name)
+        if prop_sec is None:
+            return {"error": f"Property '{prop_name}' not found. Available: {list(sections_data.get('properties', {}).keys())}"}
+        items = prop_sec.get("items", [])
+    elif section == "personal":
+        items = sections_data.get("personal", [])
+    elif section == "ignored":
+        items = sections_data.get("ignored", [])
+        # Group ignored items by reason
+        auto_skipped = [i for i in items if i.get("exclusion_reason") in ("transfer", "income")]
+        manually_skipped = [i for i in items if i.get("exclusion_reason") not in ("transfer", "income")]
+        return {
+            "section": section,
+            "auto_skipped": auto_skipped,
+            "auto_skipped_count": len(auto_skipped),
+            "manually_skipped": manually_skipped,
+            "manually_skipped_count": len(manually_skipped),
+            "total": len(items),
+        }
+    elif section == "unclassified":
+        items = sections_data.get("unclassified", [])
+        return {"section": section, "items": items, "count": len(items)}
+    else:
+        available = ["credit_accounts"]
+        available += [f"property:{k}" for k in sections_data.get("properties", {}).keys()]
+        available += ["personal", "ignored", "unclassified"]
+        return {"error": f"Unknown section '{section}'. Available: {available}"}
+
+    # Group items by source
+    matched = []
+    declared_only = []
+    detected_only = []
+    for item in items:
+        ev = item.get("evidence", {})
+        has_config = ev.get("config") is not None
+        has_monarch = ev.get("monarch") is not None
+        if has_config and has_monarch:
+            matched.append(item)
+        elif has_config:
+            declared_only.append(item)
+        else:
+            detected_only.append(item)
+
+    matched_count = len(matched)
+    declared_only_count = len(declared_only)
+    detected_only_count = len(detected_only)
+
+    return {
+        "section": section,
+        "declared_total": matched_count + declared_only_count,
+        "detected_total": matched_count + detected_only_count,
+        "matched": matched,
+        "matched_count": matched_count,
+        "declared_only": declared_only,
+        "declared_only_count": declared_only_count,
+        "detected_only": detected_only,
+        "detected_only_count": detected_only_count,
+    }
 
 
 # =============================================================================

@@ -560,6 +560,131 @@ class TestAlerts:
 
 
 # =============================================================================
+# Monarch Credit Account Union
+# =============================================================================
+
+
+class TestMonarchCreditAccountUnion:
+    def test_monarch_only_credit_account_appears_in_section(self):
+        """Monarch credit account not in config shows up as unclassified."""
+        config = BillsConfig()
+        accts = [{"id": "ACC1", "displayName": "CARD (...9999)", "type": {"name": "credit"},
+                  "subtype": {"name": "credit_card"}, "currentBalance": -500, "credential": {}}]
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=accts,
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        # Should appear in credit_accounts section
+        assert len(result.sections.credit_accounts) == 1
+        item = result.sections.credit_accounts[0]
+        assert item.evidence.config is None
+        assert item.evidence.monarch is not None
+        assert item.disposition == "unclassified"
+
+        # Accountability
+        assert result.accountability.monarch_accounts.total == 1
+        assert result.accountability.monarch_accounts.not_in_config == 1
+
+    def test_linked_credit_account_not_duplicated(self):
+        """Config credit account linked to Monarch account → one item, not two."""
+        config = BillsConfig(
+            credit_accounts=[
+                CreditAccount(name="Card", issuer="Bank", last4="9999",
+                              monarch_account_id="ACC1", monarch_merchant_id="M1")
+            ]
+        )
+        streams = [_stream(stream_id="1", merchant_id="M1")]
+        accts = [{"id": "ACC1", "displayName": "CARD (...9999)", "type": {"name": "credit"},
+                  "subtype": {"name": "credit_card"}, "currentBalance": -500, "credential": {}}]
+        result = build_bill_inventory(
+            config=config, recurring_streams=streams, accounts=accts,
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        # One item, not two
+        assert len(result.sections.credit_accounts) == 1
+        item = result.sections.credit_accounts[0]
+        assert item.evidence.config is not None
+        assert item.evidence.monarch is not None
+
+        # Accountability
+        assert result.accountability.monarch_accounts.total == 1
+        assert result.accountability.monarch_accounts.linked_to_config == 1
+        assert result.accountability.monarch_accounts.not_in_config == 0
+
+    def test_auto_match_by_last4(self):
+        """Config last4 matches Monarch mask on a credit account — auto-linked."""
+        config = BillsConfig(
+            credit_accounts=[
+                CreditAccount(name="Card", issuer="Bank", last4="9999"),  # no monarch_account_id
+            ]
+        )
+        accts = [{"id": "ACC1", "displayName": "CARD (...9999)", "mask": "9999",
+                  "type": {"name": "credit"}, "subtype": {"name": "credit_card"},
+                  "currentBalance": -500, "credential": {}}]
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=accts,
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        # Should be one item with both config and monarch evidence
+        assert len(result.sections.credit_accounts) == 1
+        item = result.sections.credit_accounts[0]
+        assert item.evidence.config is not None
+        assert item.evidence.monarch is not None
+        assert item.evidence.monarch.account_id == "ACC1"
+        assert item.evidence.monarch.amount == -500
+
+        # Monarch account should be claimed, not duplicated
+        assert result.accountability.monarch_accounts.linked_to_config == 1
+        assert result.accountability.monarch_accounts.not_in_config == 0
+
+    def test_ambiguous_last4_not_auto_matched(self):
+        """Two Monarch credit accounts with same mask — no auto-match."""
+        config = BillsConfig(
+            credit_accounts=[
+                CreditAccount(name="Card", issuer="Bank", last4="9999"),
+            ]
+        )
+        accts = [
+            {"id": "ACC1", "displayName": "CARD A (...9999)", "mask": "9999",
+             "type": {"name": "credit"}, "currentBalance": -500, "credential": {}},
+            {"id": "ACC2", "displayName": "CARD B (...9999)", "mask": "9999",
+             "type": {"name": "credit"}, "currentBalance": -200, "credential": {}},
+        ]
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=accts,
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        # Config item should NOT auto-match (ambiguous)
+        config_items = [i for i in result.sections.credit_accounts if i.evidence.config is not None]
+        assert len(config_items) == 1
+        assert config_items[0].evidence.monarch is None  # no match
+
+        # Both Monarch accounts should appear as unclassified
+        monarch_only = [i for i in result.sections.credit_accounts if i.evidence.config is None]
+        assert len(monarch_only) == 2
+
+    def test_non_credit_accounts_excluded(self):
+        """Checking/savings accounts don't appear in credit account union."""
+        config = BillsConfig()
+        accts = [{"id": "ACC1", "displayName": "Checking (...1234)", "type": {"name": "depository"},
+                  "subtype": {"name": "checking"}, "currentBalance": 5000, "credential": {}}]
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=accts,
+            defaults=_defaults(), today=TODAY,
+        )
+        assert len(result.sections.credit_accounts) == 0
+        assert result.accountability.monarch_accounts.total == 0
+
+
+# =============================================================================
 # Defaults Loading
 # =============================================================================
 
