@@ -91,18 +91,19 @@ credit_accounts:
 
 properties:
 - name: Primary Residence
-  type: residence
+  inherit: residence
+  funding_account: "5678"
   bills:
   - name: Mortgage
     vendor: Mortgage Company
-    due_day: 1
-    payment_method: auto_draft
-    funding_account: "5678"
-  - name: Electric
-    vendor: Electric Co
-    payment_method: auto_draft
+  - name: Electric/Gas
     managed_by: spouse
 ```
+
+Inheriting from `residence` automatically expects: Mortgage, Electric/Gas, Water/Trash,
+Internet, Home Insurance, Property Tax. You only need to declare bills where you're adding
+vendor details, managed_by, or other overrides. Use `exclude: true` on any inherited bill
+that doesn't apply.
 
 ### 3. Run bill check
 
