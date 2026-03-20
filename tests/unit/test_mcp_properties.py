@@ -117,11 +117,11 @@ class TestUpdateProperty:
         assert result["success"] is True
         assert result["property"]["address"] == "123 Main St"
 
-    def test_updates_type(self, config_dir):
+    def test_updates_inherit(self, config_dir):
         call("register_property_bill", {"property_name": "Rental", "bill_name": "Mortgage", "vendor": "Bank"})
-        result = call("update_property", {"name": "Rental", "type": "rental"})
+        result = call("update_property", {"name": "Rental", "inherit": "rental_vacation"})
         assert result["success"] is True
-        assert result["property"]["type"] == "rental"
+        assert result["property"]["inherit"] == "rental_vacation"
 
     def test_updates_multiple_fields(self, config_dir):
         call("register_property_bill", {"property_name": "Beach", "bill_name": "Water", "vendor": "City"})

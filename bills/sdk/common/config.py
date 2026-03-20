@@ -79,14 +79,15 @@ class PropertyBill(BaseModel):
     """A bill associated with a property."""
 
     name: str = Field(description="Bill type, e.g. 'Mortgage', 'Water', 'Trash'")
-    vendor: str = Field(description="Vendor name, e.g. 'Mortgage Company', 'City Water Dept'")
+    exclude: bool = Field(default=False, description="If true, this inherited bill does not apply to this property")
+    vendor: Optional[str] = Field(default=None, description="Vendor name, e.g. 'Mortgage Company', 'City Water Dept'")
     monarch_merchant_id: Optional[str] = Field(
         default=None, description="Monarch merchant ID for deterministic stream lookup"
     )
     due_day: Optional[int] = Field(default=None, description="Day of month due (1-31)")
     amount: Optional[float] = Field(default=None, description="Expected amount")
-    payment_method: str = Field(
-        default="manual",
+    payment_method: Optional[str] = Field(
+        default=None,
         description="How payments are made: auto_draft, auto_pay, manual",
     )
     funding_account: Optional[str] = Field(
@@ -99,17 +100,12 @@ class PropertyBill(BaseModel):
 
 
 class Property(BaseModel):
-    """A property with associated bills."""
+    """A property with associated bills. Can be abstract (template) or concrete."""
 
     name: str = Field(description="Property name, e.g. 'Primary Residence', 'Rental 1'")
-    type: str = Field(
-        default="residence",
-        description="Type: residence, rental_longterm, rental_vacation, rental, land, personal",
-    )
-    has_mortgage: bool = Field(
-        default=True,
-        description="Whether this property has a mortgage. Set false for paid-off or unfinanced properties.",
-    )
+    abstract: bool = Field(default=False, description="If true, this is a template, not a real property")
+    inherit: Optional[str] = Field(default=None, description="Name of parent template to inherit bills from")
+    funding_account: Optional[str] = Field(default=None, description="Default funding account last4 for this property's bills")
     address: Optional[str] = Field(default=None, description="Property address")
     tax_id: Optional[str] = Field(default=None, description="Property tax ID or parcel number")
     bills: list[PropertyBill] = Field(default_factory=list)
