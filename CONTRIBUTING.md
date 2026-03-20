@@ -89,14 +89,14 @@ All business logic lives in `bills/sdk/`. MCP server and CLI are thin wrappers.
 
 ```
 bills/sdk/common/
-  config.py       ← models + load/save
+  config.py       ← Pydantic models + load/save
+  config.yaml     ← package-level config: abstract templates + skip patterns
   accounts.py     ← credit account + promo operations
-  properties.py   ← property + bill operations
+  properties.py   ← property + bill operations + inheritance resolution
   filters.py      ← bill filter operations + fnmatch
   budget.py       ← budget scope operations
   inventory.py    ← bill inventory: ID-based join logic + accountability
   ignored.py      ← ignored merchant management
-  defaults.yaml   ← property type templates + skip patterns
 
 bills/mcp/
   server.py       ← MCP tool definitions, calls SDK
@@ -109,17 +109,73 @@ If you're writing logic in server.py or cli.py, stop and move it to SDK.
 
 ### Config Models (Pydantic)
 
-- `PromoFinancing` — a promo plan on a credit account
+- `Property` — a property (concrete or abstract template) with bills, inheritance, and funding account
+- `PropertyBill` — a bill on a property, with optional vendor, merchant link, managed_by, and exclude flag
 - `CreditAccount` — a credit account with payment method, promos, and Monarch ID links
-- `PropertyBill` — a bill associated with a property, with Monarch merchant link
-- `IgnoredMerchant` — a Monarch merchant explicitly classified as ignorable
-- `Property` — a property with bills (type: residence, rental_longterm, rental_vacation, land, personal)
+- `PromoFinancing` — a promo plan on a credit account
 - `FundingAccount` — a checking/savings account
+- `IgnoredMerchant` — a Monarch merchant explicitly classified as ignorable
 - `BillFilterConfig` — glob patterns for filtering Monarch categories
 - `BudgetScopeConfig` — which categories count toward cash flow
 - `BillsConfig` — root model containing all of the above
 
-Config is stored as YAML at `~/.config/bills/config.yaml` following XDG conventions.
+### Two-Layer Config
+
+**Package config** (`bills/sdk/common/config.yaml`) ships with the code and defines abstract
+property templates (residence, rental_vacation, rental_longterm, real_estate, personal) plus
+skip patterns. This is the base layer.
+
+**User config** (`~/.config/bills/config.yaml`) declares concrete properties that inherit from
+templates, credit accounts, funding accounts, and ignored merchants. This is the override layer.
+
+Properties merge by name. A concrete property inherits all bills from its template and can:
+- Override bill fields (vendor, merchant_id, managed_by) by declaring a bill with the same name
+- Exclude inherited bills with `exclude: true`
+- Add extra bills not in the template (HOA, HELOC, etc.)
+
+### Property Inheritance
+
+```yaml
+# Package config (abstract templates)
+properties:
+  - name: real_estate
+    abstract: true
+    bills:
+      - name: Mortgage
+      - name: Property Tax
+
+  - name: rental_vacation
+    abstract: true
+    inherit: real_estate
+    bills:
+      - name: Electric
+      - name: Water
+      - name: Trash
+      - name: Internet
+      - name: Insurance
+      - name: Management
+
+# User config (concrete properties)
+properties:
+  - name: Lake House
+    inherit: rental_vacation
+    funding_account: "1234"
+    bills:
+      - name: Management
+        exclude: true
+      - name: Mortgage
+        vendor: Mortgage Co
+```
+
+Lake House inherits Mortgage + Property Tax from real_estate (via rental_vacation),
+plus Electric, Water, Trash, Internet, Insurance, Management from rental_vacation.
+Then excludes Management and adds a vendor to Mortgage. Result: 7 bills.
+
+Abstract properties are skipped by the inventory — they're templates only. Concrete
+properties (abstract=false, the default) are processed.
+
+Removing an inherited bill via the `remove_property_bill` tool raises `InheritedBillError` —
+use `exclude: true` instead. Updating an inherited bill creates a local override entry.
 
 ## Plugin Structure
 
@@ -181,19 +237,16 @@ When ready to ship (skills, MCP tools, config models):
 
 ### Packaging Non-Python Files
 
-Data files shipped with the package (e.g., `defaults.yaml`) must be declared in `pyproject.toml`:
+Data files shipped with the package (e.g., `config.yaml`) must be declared in `pyproject.toml`:
 
 ```toml
 [tool.setuptools.package-data]
-"bills.sdk.common" = ["defaults.yaml"]
+"bills.sdk.common" = ["config.yaml"]
 ```
 
-Without this, `pipx install` won't include them and the installed `bills-mcp` will crash at runtime with `FileNotFoundError`. Always verify after adding new data files:
+Without this, `pipx install` won't include them and the installed `bills-mcp` will crash
+at runtime with `FileNotFoundError`.
 
-```bash
-pipx install --force .
-ls $(python -c "import bills.sdk.common; print(bills.sdk.common.__path__[0])")/defaults.yaml
-```
 
 ## Testing
 
@@ -220,9 +273,11 @@ The config declares what should exist. It does not store transaction history, pa
 
 Neither config nor Monarch alone tells the full story. Config without Monarch can't tell you if a bill was paid. Monarch without config can't tell you if a bill is missing. The skill exists to bridge this gap.
 
-### Properties Define Minimum Bill Sets
+### Properties Inherit Expected Bills
 
-If you own a property, you expect certain bills (mortgage, water, electric, trash, insurance). If one stops showing up in Monarch, that's a signal — not something to ignore. Property declarations are the "minimum viable bill set" for each property.
+Abstract templates define the minimum bill set per property category. Concrete properties
+inherit from templates and override as needed. If an expected bill stops showing up in
+Monarch, that's a signal — not something to ignore.
 
 ### Prefer Monarch's Data Model Over Pattern Matching
 
@@ -234,10 +289,10 @@ Monarch system-level classification that works universally. See `docs/TODOS.md` 
 
 ### Persist Only What Monarch Can't Provide
 
-Config should store information Monarch doesn't know: property types, mortgage status,
-which property a bill belongs to, who manages it, payment method. It should NOT duplicate
-data Monarch provides live: amounts, due dates, vendor names, payment status. These go
-stale. The config is the human-knowledge layer; Monarch is the live-data layer.
+Config should store information Monarch doesn't know: which template a property inherits
+from, which bills to exclude, who manages a bill, merchant-to-bill links. It should NOT
+duplicate data Monarch provides live: amounts, due dates, vendor names, payment status.
+These go stale. The config is the human-knowledge layer; Monarch is the live-data layer.
 
 ### Stream-to-Property Assignment via Funding Accounts
 
@@ -247,29 +302,26 @@ deterministic and requires no fuzzy matching. For users with property-specific a
 this auto-assigns most streams without user input. For users with shared accounts, streams
 fall through to manual classification.
 
-### Bill Configuration: Current vs Future
+### Bill Configuration
 
-**Current:** PropertyBill entries store vendor, amount, due_day, payment_method,
-funding_account, managed_by, and monarch_merchant_id. Bills are declared explicitly or
-created by the agent during reconciliation.
-
-**Future direction:** May evolve to a thinner `merchant_slots` mapping — just
-`{merchant_id: slot_name}` per property, plus optional overrides (managed_by,
-payment_method). Everything else comes from Monarch live. This eliminates stale config
-but requires the merchant-to-slot association to be persisted since Monarch categories
-don't distinguish electric from water from trash within the same category group.
+PropertyBill entries are lightweight — most fields are optional. The minimum bill entry is
+just a name (inherits everything from the template). Add vendor, merchant_id, managed_by,
+exclude as needed. Amounts, due dates, and payment status come from Monarch live.
 
 **Alternatives considered and rejected:**
 
-- *Restructuring Monarch categories* to map to framework slots. Rejected: couples
-  Monarch's tax-reporting category structure to this tool's needs. Not portable.
+- *Restructuring Monarch categories* to help classify bills. Rejected: couples Monarch's
+  tax-reporting category structure to this tool's needs. Not portable across users.
 
 - *Fully automatic bill discovery* with zero config. Rejected: category groups distinguish
   income/transfer/expense but can't distinguish which utility is which within a property.
-  Merchant-to-slot mapping requires human judgment at least once.
+  Bill-to-merchant linking requires human judgment at least once.
 
-- *Auto-creating config entries on first check*. Rejected: makes one run special, creates
-  entries that go stale. Better to derive fresh and only persist the merchant association.
+- *has_mortgage as a special flag*. Rejected: mortgage is just another bill. Exclude it
+  if the property doesn't have one. No special-case code needed.
+
+- *Separate property_types dict*. Rejected: templates are just abstract properties.
+  One inheritance model handles everything.
 
 ## Future Enhancements
 

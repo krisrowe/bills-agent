@@ -170,7 +170,7 @@ a matching recurring payment in bank data. Either it's not set up as recurring, 
 merchant name doesn't match, or it's paid outside your connected accounts."
 For each: show bill name, vendor, amount, method.
 Note if `managed_by` is set (e.g., "👤 managed by spouse").
-Note if `evidence.framework` is present (expected based on property type).
+Note if this bill was inherited from the property's template (no vendor/details configured yet).
 
 **Detected only ([detected_only_count])** — "Bank data shows these recurring payments
 for this property but you haven't declared them as bills."
@@ -324,5 +324,5 @@ Useful for vendor cards not connected to Monarch (Best Buy, store financing, etc
 - After each section, offer to fix problems before moving on
 - Use plain language — never use internal terms
 - Group by source so the user can visually verify coverage
-- Property type `rental` in old configs needs migration — ask if long-term or vacation
+- Properties can `inherit` from templates (residence, rental_vacation, etc.) to get expected bills automatically
 - After reconciling, rebuild the inventory to show the improved state

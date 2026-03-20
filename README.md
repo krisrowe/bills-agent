@@ -120,9 +120,67 @@ The agent loads your expectations and Monarch's recurring data, cross-references
 
 Walks through a credit card's statement cycles, charges, payments, and interest to explain how the current balance was reached.
 
-## Config Location
+## Configuration
 
 All user data lives at `~/.config/bills/config.yaml`. The repo contains no personal data.
+
+### Property Inheritance
+
+The package ships with abstract templates (residence, rental_vacation, rental_longterm,
+real_estate, personal). Your properties inherit from them:
+
+```yaml
+properties:
+  - name: My House
+    inherit: residence
+    bills:
+      - name: Mortgage
+        vendor: Mortgage Co
+      - name: Home Insurance
+        exclude: true    # doesn't apply to this property
+
+  - name: Back 40
+    inherit: real_estate
+    bills:
+      - name: Mortgage
+        exclude: true    # no mortgage on this land
+```
+
+Each template defines expected bills. `inherit` pulls them in. `exclude: true` removes
+specific bills. Extra bills (not in the template) are added by declaring them.
+
+### Disabling Templates
+
+To disable a package template (e.g., `personal`) so it doesn't appear in reports:
+
+```yaml
+properties:
+  - name: personal
+    abstract: true
+```
+
+Setting `abstract: true` in your config overrides the package default. The inventory
+skips abstract properties.
+
+### Custom Templates
+
+Create your own reusable templates:
+
+```yaml
+properties:
+  - name: my_str
+    abstract: true
+    inherit: rental_vacation
+    bills:
+      - name: Management
+        exclude: true
+
+  - name: Lake House
+    inherit: my_str
+
+  - name: Mountain Cabin
+    inherit: my_str
+```
 
 ## MCP Tools
 
@@ -145,10 +203,21 @@ All user data lives at `~/.config/bills/config.yaml`. The repo contains no perso
 - `remove_promo` — remove a completed promo
 
 ### Properties
-- `list_properties` — all properties and their bills
-- `list_property_bills` — bills for one property
+- `list_properties` — all properties and their declared bills
+- `list_property_bills` — declared bills for one property (inheritance applied)
 - `register_property_bill` — add a bill (creates property if needed)
-- `update_property` — update property metadata
+- `update_property_bill` — update bill fields or create local override for inherited bill
+- `remove_property_bill` — remove a locally-added bill (raises error for inherited bills — use exclude)
+- `update_property` — update property metadata (inherit, abstract, funding_account, etc.)
+
+### Inventory
+- `build_bill_inventory` — cross-reference declared bills against bank data, cache result
+- `get_inventory_section` — fetch one section from cached inventory, pre-grouped by source
+
+### Ignored Merchants
+- `list_ignored_merchants` — merchants you told us to skip
+- `add_ignored_merchant` — ignore a bank recurring stream
+- `remove_ignored_merchant` — stop ignoring a merchant
 
 ### Funding Accounts
 - `list_funding_accounts` — checking/savings accounts
