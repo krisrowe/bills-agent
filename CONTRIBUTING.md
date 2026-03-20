@@ -265,6 +265,14 @@ This repo is PUBLIC. All personal data lives in `~/.config/bills/` at runtime, n
 
 When Monarch data is wrong (stale recurring streams, phantom entries), the correct response is to fix Monarch — not to add exclusions or workarounds in the config. The bill filter is intentionally inclusive: if something matches, it's treated as a real bill.
 
+### Config Is Managed Through Tools, Not Direct Editing
+
+Users should never need to edit YAML directly. MCP tools, CLI commands, and the skill
+workflow must provide full control over configuration — declaring properties, inheriting
+templates, excluding bills, linking merchants, managing ignored streams. All user-facing
+documentation should describe tool interfaces, not raw YAML. The only exception is
+import/export/diff operations where the YAML representation is the point.
+
 ### Config Is Expectations, Not History
 
 The config declares what should exist. It does not store transaction history, payment dates, or balances — those come from Monarch at query time. The only exception is promo financing, where Monarch has no equivalent data.
