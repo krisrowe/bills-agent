@@ -265,6 +265,14 @@ This repo is PUBLIC. All personal data lives in `~/.config/bills/` at runtime, n
 
 When Monarch data is wrong (stale recurring streams, phantom entries), the correct response is to fix Monarch — not to add exclusions or workarounds in the config. The bill filter is intentionally inclusive: if something matches, it's treated as a real bill.
 
+### README vs CONTRIBUTING
+
+README is for anyone using the tool — installation, configuration concepts, tool
+interfaces, and how the system works from a user perspective. CONTRIBUTING is for
+anyone modifying the code — architecture, design decisions, tradeoffs, and
+implementation details. If a user needs to know it to use the tool, it goes in README.
+If a developer needs to know it to change the code, it goes in CONTRIBUTING.
+
 ### Config Is Managed Through Tools, Not Direct Editing
 
 Users should never need to edit YAML directly. MCP tools, CLI commands, and the skill
