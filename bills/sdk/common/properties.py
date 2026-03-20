@@ -307,3 +307,41 @@ def remove_property_bill(
         return False, f"No bill '{bill_name}' on property '{property_name}'"
 
     return False, f"No property named '{property_name}'"
+
+
+def _is_package_property(name: str) -> bool:
+    """Check if a property name exists in the package config."""
+    defaults = load_package_config()
+    return any(p.name.lower() == name.lower() for p in defaults.properties)
+
+
+def remove_property(name: str) -> tuple[bool, str]:
+    """Remove a property.
+
+    If the property is from the package config, writes a deleted tombstone.
+    If user-added, removes the entry entirely.
+    Returns (success, message).
+    """
+    config = load_config()
+
+    for i, prop in enumerate(config.properties):
+        if prop.name.lower() != name.lower():
+            continue
+        if prop.deleted:
+            return False, f"Property '{name}' is already removed"
+
+        if _is_package_property(name):
+            prop.deleted = True
+            config.properties[i] = prop
+        else:
+            config.properties.pop(i)
+
+        save_config(config)
+        return True, f"Removed property '{name}'"
+
+    if _is_package_property(name):
+        config.properties.append(Property(name=name, deleted=True))
+        save_config(config)
+        return True, f"Removed property '{name}'"
+
+    return False, f"No property named '{name}'"
