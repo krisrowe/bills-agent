@@ -8,8 +8,8 @@ from bills.sdk.common.config import (
     PropertyBill,
     save_config,
 )
+from bills.sdk.common.config import load_config
 from bills.sdk.common.properties import (
-    InheritedBillError,
     get_resolved_property,
     list_properties,
     remove_property_bill,
@@ -29,11 +29,8 @@ def _write_config(config: BillsConfig, config_dir) -> None:
 
 
 class TestRemovePropertyBill:
-    def test_remove_inherited_bill_raises_error(self, config_dir):
-        """Removing a bill that comes from inheritance raises InheritedBillError."""
-        # residence template has Mortgage (via real_estate), Electric/Gas, etc.
-        # The package config.yaml provides residence -> real_estate.
-        # We set up a property that inherits residence (from the real package config).
+    def test_remove_inherited_bill_writes_tombstone(self, config_dir):
+        """Removing an inherited bill writes a deleted tombstone and hides it from resolved output."""
         config = BillsConfig(
             properties=[
                 Property(name="Home", inherit="residence"),
@@ -41,8 +38,21 @@ class TestRemovePropertyBill:
         )
         _write_config(config, config_dir)
 
-        with pytest.raises(InheritedBillError):
-            remove_property_bill("Home", "Mortgage")
+        success, msg = remove_property_bill("Home", "Mortgage")
+        assert success is True
+
+        # The bill should be gone from resolved output
+        result = get_resolved_property("Home")
+        assert result is not None
+        _, resolved = result
+        bill_names = [b.name for b in resolved]
+        assert "Mortgage" not in bill_names
+
+        # But a tombstone should exist in the raw config
+        raw = load_config()
+        home = next(p for p in raw.properties if p.name == "Home")
+        tombstone = next(b for b in home.bills if b.name == "Mortgage")
+        assert tombstone.deleted is True
 
     def test_remove_locally_added_bill_succeeds(self, config_dir):
         """Removing a bill added directly to the property (not inherited) succeeds."""

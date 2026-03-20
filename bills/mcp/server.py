@@ -988,7 +988,7 @@ async def get_inventory_section_tool(
         has_monarch = ev.get("monarch") is not None
         if has_declared and has_monarch:
             matched.append(item)
-        elif has_config or has_framework:
+        elif has_declared:
             declared_only.append(item)
         elif has_monarch:
             detected_only.append(item)

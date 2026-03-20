@@ -110,7 +110,7 @@ If you're writing logic in server.py or cli.py, stop and move it to SDK.
 ### Config Models (Pydantic)
 
 - `Property` — a property (concrete or abstract template) with bills, inheritance, and funding account
-- `PropertyBill` — a bill on a property, with optional vendor, merchant link, managed_by, and exclude flag
+- `PropertyBill` — a bill on a property, with optional vendor, merchant link, managed_by, and remove flag
 - `CreditAccount` — a credit account with payment method, promos, and Monarch ID links
 - `PromoFinancing` — a promo plan on a credit account
 - `FundingAccount` — a checking/savings account
@@ -130,7 +130,7 @@ templates, credit accounts, funding accounts, and ignored merchants. This is the
 
 Properties merge by name. A concrete property inherits all bills from its template and can:
 - Override bill fields (vendor, merchant_id, managed_by) by declaring a bill with the same name
-- Exclude inherited bills with `exclude: true`
+- Exclude inherited bills with `remove: true`
 - Add extra bills not in the template (HOA, HELOC, etc.)
 
 ### Property Inheritance
@@ -162,20 +162,20 @@ properties:
     funding_account: "1234"
     bills:
       - name: Management
-        exclude: true
+        remove: true
       - name: Mortgage
         vendor: Mortgage Co
 ```
 
 Lake House inherits Mortgage + Property Tax from real_estate (via rental_vacation),
 plus Electric, Water, Trash, Internet, Insurance, Management from rental_vacation.
-Then excludes Management and adds a vendor to Mortgage. Result: 7 bills.
+Then removes Management and adds a vendor to Mortgage. Result: 7 bills.
 
 Abstract properties are skipped by the inventory — they're templates only. Concrete
 properties (abstract=false, the default) are processed.
 
 Removing an inherited bill via the `remove_property_bill` tool raises `InheritedBillError` —
-use `exclude: true` instead. Updating an inherited bill creates a local override entry.
+use `remove: true` instead. Updating an inherited bill creates a local override entry.
 
 ## Plugin Structure
 
@@ -306,7 +306,7 @@ Monarch system-level classification that works universally. See `docs/TODOS.md` 
 ### Persist Only What Monarch Can't Provide
 
 Config should store information Monarch doesn't know: which template a property inherits
-from, which bills to exclude, who manages a bill, merchant-to-bill links. It should NOT
+from, which bills to remove, who manages a bill, merchant-to-bill links. It should NOT
 duplicate data Monarch provides live: amounts, due dates, vendor names, payment status.
 These go stale. The config is the human-knowledge layer; Monarch is the live-data layer.
 
@@ -322,7 +322,7 @@ fall through to manual classification.
 
 PropertyBill entries are lightweight — most fields are optional. The minimum bill entry is
 just a name (inherits everything from the template). Add vendor, merchant_id, managed_by,
-exclude as needed. Amounts, due dates, and payment status come from Monarch live.
+remove as needed. Amounts, due dates, and payment status come from Monarch live.
 
 **Alternatives considered and rejected:**
 

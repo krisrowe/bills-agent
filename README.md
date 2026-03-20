@@ -17,7 +17,7 @@ Bills Agent bridges this gap. You declare what bills should exist (properties, c
 ## What It Includes
 
 - **Claude Code plugin** with `/bills:check` and `/bills:explain` skills
-- **MCP server** (`bills-mcp`) for managing bill expectations in `~/.config/bills/config.yaml`
+- **MCP server** (`bills-mcp`) for managing bill expectations
 - **CLI** (`bills`) for launching Claude with the plugin attached
 
 ## Prerequisites
@@ -59,51 +59,22 @@ Start Claude Code and check:
 
 ### 1. Set up bill filters
 
-Bill filters define which Monarch recurring categories are "consequential bills." Use the MCP tools or edit `~/.config/bills/config.yaml` directly:
-
-```yaml
-bill_filters:
-  categories:
-  - '*Mortgage*'
-  - '*Interest*'
-  - '*Utilities*'
-  - 'Loan*'
-  - 'Credit Card Payment'
-  - 'Water'
-  - 'Internet*'
-  - 'Phone'
-  - '*Insurance*'
-```
-
-Patterns use glob-style matching against Monarch category names.
+Bill filters define which Monarch recurring categories are "consequential bills."
+Use the `add_bill_filter` tool to add patterns like `*Mortgage*`, `Water`, `Phone`,
+`*Insurance*`. Patterns use glob-style matching against Monarch category names.
 
 ### 2. Declare your expectations
 
-Add your credit accounts, properties, and bills to the config. Use the MCP tools (`register_credit_account`, `register_property_bill`) or edit the YAML directly:
+Use MCP tools to set up your accounts and properties:
 
-```yaml
-credit_accounts:
-- name: Visa Card
-  last4: "1234"
-  issuer: Chase
-  payment_method: auto_pay_full
-  funding_account: "5678"
+- `register_credit_account` — add each credit card/account
+- `register_property_bill` — add a property and its bills (creates the property if needed)
+- `update_property` — set `inherit` to a template (residence, rental_vacation, etc.)
+- `remove_property_bill` — remove inherited bills that don't apply
 
-properties:
-- name: Primary Residence
-  inherit: residence
-  funding_account: "5678"
-  bills:
-  - name: Mortgage
-    vendor: Mortgage Company
-  - name: Electric/Gas
-    managed_by: spouse
-```
-
-Inheriting from `residence` automatically expects: Mortgage, Electric/Gas, Water/Trash,
-Internet, Home Insurance, Property Tax. You only need to declare bills where you're adding
-vendor details, managed_by, or other overrides. Use `exclude: true` on any inherited bill
-that doesn't apply.
+Properties can inherit from templates. Inheriting from `residence` automatically expects:
+Mortgage, Electric/Gas, Water/Trash, Internet, Home Insurance, Property Tax. You only
+need to register bills where you're adding vendor details, managed_by, or other overrides.
 
 ### 3. Run bill check
 
@@ -123,65 +94,26 @@ Walks through a credit card's statement cycles, charges, payments, and interest 
 
 ## Configuration
 
-All user data lives at `~/.config/bills/config.yaml`. The repo contains no personal data.
+All configuration is managed through MCP tools and CLI commands. Your settings are
+stored locally and never included in the repo.
 
-### Property Inheritance
+### Property Templates
 
-The package ships with abstract templates (residence, rental_vacation, rental_longterm,
-real_estate, personal). Your properties inherit from them:
+The package ships with templates for common property types:
 
-```yaml
-properties:
-  - name: My House
-    inherit: residence
-    bills:
-      - name: Mortgage
-        vendor: Mortgage Co
-      - name: Home Insurance
-        exclude: true    # doesn't apply to this property
+- **real_estate** — Mortgage, Property Tax
+- **residence** (inherits real_estate) — adds Electric/Gas, Water/Trash, Internet, Home Insurance
+- **rental_vacation** (inherits real_estate) — adds Electric, Water, Trash, Internet, Insurance, Management
+- **rental_longterm** (inherits real_estate) — adds Insurance
+- **personal** — Housing, Phone, Auto Insurance
 
-  - name: Back 40
-    inherit: real_estate
-    bills:
-      - name: Mortgage
-        exclude: true    # no mortgage on this land
-```
+Use `update_property` to set `inherit` on your properties. The inherited template's bills
+become your expected bills. Use `remove_property_bill` to remove any that don't apply.
+Use `register_property_bill` to add bills beyond the template.
 
-Each template defines expected bills. `inherit` pulls them in. `exclude: true` removes
-specific bills. Extra bills (not in the template) are added by declaring them.
+Templates can be chained — rental_vacation inherits from real_estate, so vacation rentals
+automatically get Mortgage and Property Tax plus their own bills.
 
-### Disabling Templates
-
-To disable a package template (e.g., `personal`) so it doesn't appear in reports:
-
-```yaml
-properties:
-  - name: personal
-    abstract: true
-```
-
-Setting `abstract: true` in your config overrides the package default. The inventory
-skips abstract properties.
-
-### Custom Templates
-
-Create your own reusable templates:
-
-```yaml
-properties:
-  - name: my_str
-    abstract: true
-    inherit: rental_vacation
-    bills:
-      - name: Management
-        exclude: true
-
-  - name: Lake House
-    inherit: my_str
-
-  - name: Mountain Cabin
-    inherit: my_str
-```
 
 ## MCP Tools
 
@@ -208,7 +140,7 @@ properties:
 - `list_property_bills` — declared bills for one property (inheritance applied)
 - `register_property_bill` — add a bill (creates property if needed)
 - `update_property_bill` — update bill fields or create local override for inherited bill
-- `remove_property_bill` — remove a locally-added bill (raises error for inherited bills — use exclude)
+- `remove_property_bill` — remove a bill from a property, whether inherited or not
 - `update_property` — update property metadata (inherit, abstract, funding_account, etc.)
 
 ### Inventory

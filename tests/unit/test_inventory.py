@@ -442,13 +442,13 @@ class TestInheritanceAndResolution:
             assert item.payment_status.status == "gap"
 
     def test_excluded_bill_does_not_appear_in_resolved_output(self):
-        """A bill with exclude=True removes the inherited bill from the property."""
+        """A bill with deleted=True removes the inherited bill from the property."""
         config = BillsConfig(
             properties=[
                 Property(
                     name="Home",
                     inherit="residence",
-                    bills=[PropertyBill(name="Mortgage", exclude=True)],
+                    bills=[PropertyBill(name="Mortgage", deleted=True)],
                 )
             ]
         )
@@ -609,13 +609,13 @@ class TestResolveInheritance:
 
 class TestExcludeBehavior:
     def test_exclude_removes_inherited_bill(self):
-        """A property bill marked exclude=True suppresses the inherited bill."""
+        """A property bill marked deleted=True suppresses the inherited bill."""
         config = BillsConfig(
             properties=[
                 Property(
                     name="Home",
                     inherit="residence",
-                    bills=[PropertyBill(name="Mortgage", exclude=True)],
+                    bills=[PropertyBill(name="Mortgage", deleted=True)],
                 )
             ]
         )
@@ -632,14 +632,14 @@ class TestExcludeBehavior:
         assert "Property Tax" in bill_names
 
     def test_exclude_on_non_inherited_bill(self):
-        """A locally added bill with exclude=True does not appear in resolved output."""
+        """A locally added bill with deleted=True does not appear in resolved output."""
         config = BillsConfig(
             properties=[
                 Property(
                     name="Cabin",
                     bills=[
                         PropertyBill(name="Electric"),
-                        PropertyBill(name="Cable TV", exclude=True),
+                        PropertyBill(name="Cable TV", deleted=True),
                     ],
                 )
             ]
