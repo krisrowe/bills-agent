@@ -5,7 +5,6 @@ from datetime import date
 import pytest
 
 from bills.sdk.common.config import (
-    BillFilterConfig,
     BillsConfig,
     CreditAccount,
     IgnoredMerchant,
@@ -15,7 +14,6 @@ from bills.sdk.common.config import (
 )
 from bills.sdk.common.inventory import (
     AppDefaults,
-    InventoryAccountabilityError,
     SkipPatternGroup,
     build_bill_inventory,
     load_package_config,
@@ -104,19 +102,12 @@ TODAY = date(2026, 3, 16)
 
 
 def _assert_accountability_balances(result):
-    """Assert both accountability groups sum correctly."""
-    ms = result.accountability.monarch_streams
-    assert (
-        ms.matched_to_config
-        + ms.matched_to_credit_accounts
-        + ms.matched_by_bill_filter
-        + ms.ignored_by_pattern
-        + ms.ignored_by_merchant_list
-        + ms.unclassified
-    ) == ms.total
-
-    ce = result.accountability.config_expectations
-    assert ce.linked_to_monarch + ce.gap == ce.total
+    """Assert stream accounting totals balance."""
+    sa = result.stream_accounting
+    linked = sum(sa.linked_per_property.values())
+    skipped = len(sa.skipped_transfers) + len(sa.skipped_income)
+    ignored = len(sa.ignored_by_you)
+    assert linked + skipped + ignored + sa.unidentified_count == sa.total
 
 
 # =============================================================================
@@ -134,8 +125,8 @@ class TestAccountabilityBalances:
             today=TODAY,
         )
         _assert_accountability_balances(result)
-        assert result.accountability.monarch_streams.total == 0
-        assert result.accountability.config_expectations.total == 0
+        assert result.stream_accounting.total == 0
+        assert result.declared_summary == []
 
     def test_mixed_sources_all_accounted(self):
         config = BillsConfig(
@@ -155,7 +146,6 @@ class TestAccountabilityBalances:
             ignored_merchants=[
                 IgnoredMerchant(merchant_id="M5", name="Streaming", reason="subscription_inconsequential"),
             ],
-            bill_filters=BillFilterConfig(categories=["Phone"]),
         )
         streams = [
             _stream(stream_id="1", merchant_id="M1", merchant="LoanCo"),
@@ -163,8 +153,7 @@ class TestAccountabilityBalances:
             _stream(stream_id="3", merchant_id="M3", merchant="Bank Card"),
             _stream(stream_id="4", merchant_id="M4", category="Same Bank Transfer"),
             _stream(stream_id="5", merchant_id="M5", merchant="Streaming"),
-            _stream(stream_id="6", merchant_id="M6", category="Phone", merchant="Carrier"),
-            _stream(stream_id="7", merchant_id="M7", merchant="Mystery", category="Misc"),
+            _stream(stream_id="6", merchant_id="M6", merchant="Mystery", category="Misc"),
         ]
         result = build_bill_inventory(
             config=config, recurring_streams=streams, accounts=[],
@@ -172,35 +161,34 @@ class TestAccountabilityBalances:
         )
         _assert_accountability_balances(result)
 
-        ms = result.accountability.monarch_streams
-        assert ms.total == 7
-        assert ms.matched_to_config == 2      # M1, M2
-        assert ms.matched_to_credit_accounts == 1  # M3
-        assert ms.ignored_by_pattern == 1      # transfer
-        assert ms.ignored_by_merchant_list == 1  # M5
-        assert ms.matched_by_bill_filter == 1  # Phone
-        assert ms.unclassified == 1            # Mystery
+        sa = result.stream_accounting
+        assert sa.total == 6
+        assert sa.linked_per_property.get("Home", 0) == 2   # M1, M2
+        assert sa.linked_per_property.get("Credit Accounts", 0) == 1  # M3
+        assert len(sa.skipped_transfers) == 1               # transfer
+        assert len(sa.ignored_by_you) == 1                  # M5
+        assert sa.unidentified_count == 1                   # Mystery
 
-        ce = result.accountability.config_expectations
-        # inherited: Mortgage + Electric/Gas + Water/Trash + Property Tax = 4
-        # Mortgage is patched (M1 linked), HOA is extra (M2 linked)
-        # Electric/Gas, Water/Trash, Property Tax = 3 gaps
-        # + 1 credit account (M3 linked) = 6 total
-        assert ce.total == 6
-        assert ce.linked_to_monarch == 3  # Mortgage, HOA, Card
-        assert ce.gap == 3  # Electric/Gas, Water/Trash, Property Tax
+        # declared_summary: credit accounts row + Home row
+        home_row = next(r for r in result.declared_summary if r.property_name == "Home")
+        # inherited: Mortgage + Electric/Gas + Water/Trash + Property Tax = 4; HOA extra = 5
+        assert home_row.declared == 5
+        assert home_row.linked == 2   # Mortgage, HOA
+        assert home_row.unlinked == 3  # Electric/Gas, Water/Trash, Property Tax
 
 
-class TestAccountabilityRaisesOnMismatch:
+class TestStreamAccountingBalances:
     def test_does_not_raise_on_valid_input(self):
-        # Should not raise
-        build_bill_inventory(
+        # Should not raise and stream totals should balance
+        result = build_bill_inventory(
             config=BillsConfig(),
             recurring_streams=[_stream(stream_id="1", merchant_id="M1")],
             accounts=[],
             defaults=_defaults(),
             today=TODAY,
         )
+        _assert_accountability_balances(result)
+        assert result.stream_accounting.unidentified_count == 1
 
 
 # =============================================================================
@@ -325,9 +313,9 @@ class TestMultipleStreamsPerMerchant:
         )
         _assert_accountability_balances(result)
 
-        # Both streams claimed → 0 unclassified
-        assert result.accountability.monarch_streams.unclassified == 0
-        assert result.accountability.monarch_streams.matched_to_config == 2
+        # Both streams claimed → 0 unidentified
+        assert result.stream_accounting.unidentified_count == 0
+        assert result.stream_accounting.linked_per_property.get("Home", 0) == 2
 
 
 # =============================================================================
@@ -372,7 +360,7 @@ class TestStreamClassification:
         _assert_accountability_balances(result)
         assert len(result.sections.ignored) == 1
         assert result.sections.ignored[0].exclusion_reason == "subscription_inconsequential"
-        assert result.accountability.monarch_streams.ignored_by_merchant_list == 1
+        assert len(result.stream_accounting.ignored_by_you) == 1
 
     def test_ignored_merchant_takes_precedence_over_skip_pattern(self):
         """Explicit user decision beats automatic pattern."""
@@ -388,23 +376,10 @@ class TestStreamClassification:
             defaults=_defaults(), today=TODAY,
         )
         _assert_accountability_balances(result)
-        assert result.accountability.monarch_streams.ignored_by_merchant_list == 1
-        assert result.accountability.monarch_streams.ignored_by_pattern == 0
+        assert len(result.stream_accounting.ignored_by_you) == 1
+        assert len(result.stream_accounting.skipped_transfers) == 0
 
-    def test_bill_filter_match_becomes_personal(self):
-        config = BillsConfig(
-            bill_filters=BillFilterConfig(categories=["Phone"]),
-        )
-        streams = [_stream(stream_id="1", merchant_id="M1", category="Phone")]
-        result = build_bill_inventory(
-            config=config, recurring_streams=streams, accounts=[],
-            defaults=_defaults(), today=TODAY,
-        )
-        _assert_accountability_balances(result)
-        assert len(result.sections.personal) == 1
-        assert result.accountability.monarch_streams.matched_by_bill_filter == 1
-
-    def test_unmatched_stream_is_unclassified(self):
+    def test_unmatched_stream_is_unidentified(self):
         config = BillsConfig()
         streams = [_stream(stream_id="1", merchant_id="M1", category="Other")]
         result = build_bill_inventory(
@@ -412,7 +387,7 @@ class TestStreamClassification:
             defaults=_defaults(), today=TODAY,
         )
         _assert_accountability_balances(result)
-        assert len(result.sections.unclassified) == 1
+        assert len(result.sections.unidentified) == 1
 
 
 # =============================================================================
@@ -682,9 +657,7 @@ class TestPaymentStatus:
         assert mortgage.payment_status.status == "overdue"
 
     def test_due_soon_within_7_days(self):
-        config = BillsConfig(
-            bill_filters=BillFilterConfig(categories=["Phone"]),
-        )
+        config = BillsConfig()
         streams = [_stream(
             stream_id="1", merchant_id="M1", category="Phone",
             is_past=False, transaction_id=None, due_date="2026-03-20",
@@ -693,7 +666,7 @@ class TestPaymentStatus:
             config=config, recurring_streams=streams, accounts=[],
             defaults=_defaults(), today=TODAY,
         )
-        assert result.sections.personal[0].payment_status.status == "due_soon"
+        assert result.sections.unidentified[0].payment_status.status == "due_soon"
 
 
 # =============================================================================
@@ -730,10 +703,15 @@ class TestDisconnectedAccounts:
 class TestAlerts:
     def test_overdue_generates_alert(self):
         config = BillsConfig(
-            bill_filters=BillFilterConfig(categories=["Phone"]),
+            properties=[
+                Property(
+                    name="Home", inherit="residence",
+                    bills=[PropertyBill(name="Mortgage", vendor="LoanCo", monarch_merchant_id="M1")],
+                )
+            ]
         )
         streams = [_stream(
-            stream_id="1", merchant_id="M1", category="Phone",
+            stream_id="1", merchant_id="M1", category="Mortgage",
             is_past=True, transaction_id=None,
         )]
         result = build_bill_inventory(
@@ -784,10 +762,6 @@ class TestMonarchCreditAccountUnion:
         assert item.evidence.monarch is not None
         assert item.disposition == "unclassified"
 
-        # Accountability
-        assert result.accountability.monarch_accounts.total == 1
-        assert result.accountability.monarch_accounts.not_in_config == 1
-
     def test_linked_credit_account_not_duplicated(self):
         """Config credit account linked to Monarch account → one item, not two."""
         config = BillsConfig(
@@ -810,11 +784,6 @@ class TestMonarchCreditAccountUnion:
         item = result.sections.credit_accounts[0]
         assert item.evidence.declared is not None
         assert item.evidence.monarch is not None
-
-        # Accountability
-        assert result.accountability.monarch_accounts.total == 1
-        assert result.accountability.monarch_accounts.linked_to_config == 1
-        assert result.accountability.monarch_accounts.not_in_config == 0
 
     def test_auto_match_by_last4(self):
         """Config last4 matches Monarch mask on a credit account — auto-linked."""
@@ -839,10 +808,6 @@ class TestMonarchCreditAccountUnion:
         assert item.evidence.monarch is not None
         assert item.evidence.monarch.account_id == "ACC1"
         assert item.evidence.monarch.amount == -500
-
-        # Monarch account should be claimed, not duplicated
-        assert result.accountability.monarch_accounts.linked_to_config == 1
-        assert result.accountability.monarch_accounts.not_in_config == 0
 
     def test_ambiguous_last4_not_auto_matched(self):
         """Two Monarch credit accounts with same mask — no auto-match."""
@@ -882,7 +847,6 @@ class TestMonarchCreditAccountUnion:
             defaults=_defaults(), today=TODAY,
         )
         assert len(result.sections.credit_accounts) == 0
-        assert result.accountability.monarch_accounts.total == 0
 
 
 # =============================================================================

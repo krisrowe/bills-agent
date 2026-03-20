@@ -439,9 +439,10 @@ If the property doesn't exist, it will be created automatically.
 Required: property_name, bill_name, vendor
 Recommended: due_day, payment_method, funding_account
 
-For non-property bills (T-Mobile, insurance), use property_name='Personal' with type='personal'.
+For non-property bills (T-Mobile, insurance), create a property to group them
+(e.g., property_name='Personal Services').
 
-Templates: residence, rental_vacation, rental_longterm, real_estate, personal
+Templates: residence, rental_vacation, rental_longterm, real_estate
 
 For bills managed by someone else (e.g., spouse), set managed_by.
 These are still monitored for problems but not tracked in detail.
@@ -456,7 +457,7 @@ async def register_property_bill_tool(
     amount: Optional[float] = Field(default=None, description="Expected amount"),
     payment_method: str = Field(default="manual", description="auto_draft, auto_pay, manual"),
     funding_account: Optional[str] = Field(default=None, description="Last4 of funding account"),
-    inherit: Optional[str] = Field(default=None, description="Template to inherit from: residence, rental_vacation, rental_longterm, real_estate, personal"),
+    inherit: Optional[str] = Field(default=None, description="Template to inherit from: residence, rental_vacation, rental_longterm, real_estate"),
     managed_by: Optional[str] = Field(default=None, description="Who manages this bill (e.g., 'spouse')"),
     notes: Optional[str] = Field(default=None, description="Bill-specific notes"),
 ) -> dict:
@@ -536,7 +537,7 @@ async def remove_property_bill_tool(
     description="""Update property metadata (inherit, abstract, funding_account, address, tax_id, notes).
 
 Use to add or update property information. Only fields you provide are updated.
-Set inherit to a template name (residence, rental_vacation, rental_longterm, real_estate, personal).
+Set inherit to a template name (residence, rental_vacation, rental_longterm, real_estate).
 Set abstract=true to make this a template that other properties can inherit from.""",
 )
 async def update_property_tool(
@@ -599,7 +600,7 @@ Use to change which bills count toward cash flow calculations.
 Only fields you provide are updated.
 
 Common configurations:
-- Track only personal bills: properties_residence=true, properties_rental=false
+- Track only residence bills: properties_residence=true, properties_rental=false
 - Include everything: all fields true
 - Credit only: credit=true, others false
 
@@ -754,7 +755,7 @@ def _inventory_cache_path():
 
 @mcp.tool(
     name="build_bill_inventory",
-    description="""Build a complete bill inventory and return a manifest with alerts and accountability.
+    description="""Build a complete bill inventory and return a manifest with alerts and summaries.
 
 This is the FIRST tool to call after loading Monarch data. It cross-references config
 expectations against Monarch recurring streams using deterministic ID-based matching.
@@ -767,11 +768,16 @@ INPUTS:
 
 RETURNS (small response — manifest only, not full items):
 - inventory_hash: pass this to get_inventory_section to prevent stale reads
-- accountability: grouped totals proving every stream and config entry is accounted for
-  - monarch_streams: total + breakdown (matched_to_config, matched_to_credit_accounts,
-    matched_by_bill_filter, ignored_by_pattern, ignored_by_merchant_list, unclassified)
-  - config_expectations: total + breakdown (linked_to_monarch, gap)
-  - monarch_accounts: total + breakdown (linked_to_config, not_in_config)
+- declared_summary: table of per-property declared bill counts (declared, linked, unlinked)
+  - one row per concrete property + one row for credit accounts
+- stream_accounting: how all Monarch streams were accounted for
+  - total: total streams from Monarch
+  - linked_per_property: dict of property name → stream count linked to that property
+  - skipped_transfers: merchant names auto-skipped as transfers
+  - skipped_income: merchant names auto-skipped as income
+  - ignored_by_you: merchant names you previously told us to ignore
+  - unidentified_count: streams that couldn't be categorized
+  - unidentified_preview: first 10 unidentified merchant names with amounts
 - alerts: URGENT items needing immediate attention
   - overdue: bills past due with no payment found
   - promo_critical: deferred interest deadlines within 90 days
@@ -782,9 +788,12 @@ WORKFLOW:
 1. Call list_recurring and list_accounts from monarch-access (parallel)
 2. Call this tool with those results
 3. Present ALERTS to user first — these need immediate attention
-4. Present ACCOUNTABILITY so user sees the big picture
-5. Call get_inventory_section for each section to review one at a time
-6. For items needing reconciliation, use update tools to link/classify, then rebuild""",
+4. Present DECLARED BILLS SUMMARY TABLE from declared_summary
+5. Call get_inventory_section for each property and credit_accounts section
+6. Present STREAM ACCOUNTING SUMMARY from stream_accounting
+7. Call get_inventory_section("unidentified") for unidentified streams
+8. Call get_inventory_section("ignored") for ignored streams
+9. For items needing reconciliation, use update tools to link/classify, then rebuild""",
 )
 async def build_bill_inventory_tool(
     recurring_streams: list[dict] = Field(
@@ -813,60 +822,24 @@ async def build_bill_inventory_tool(
     # Compute hash for stale guard
     inventory_hash = hashlib.sha256(result_json.encode()).hexdigest()[:12]
 
-    # Build per-section coverage counts (same numbers get_inventory_section returns)
-    def _coverage(items):
-        matched = sum(1 for i in items if i.evidence.declared and i.evidence.monarch)
-        declared_only = sum(1 for i in items if i.evidence.declared and not i.evidence.monarch)
-        detected_only = sum(1 for i in items if not i.evidence.declared and i.evidence.monarch)
-        return {
-            "declared_total": matched + declared_only,
-            "detected_total": matched + detected_only,
-            "matched_count": matched,
-            "declared_only_count": declared_only,
-            "detected_only_count": detected_only,
-            "overdue": sum(1 for i in items if i.payment_status and i.payment_status.status == "overdue"),
-            "due_soon": sum(1 for i in items if i.payment_status and i.payment_status.status == "due_soon"),
-            "disconnected": sum(1 for i in items if i.payment_status and i.payment_status.status == "disconnected"),
-        }
-
-    sections = {}
+    # Build available sections list
+    sections = []
     if result.sections.credit_accounts:
-        sections["credit_accounts"] = _coverage(result.sections.credit_accounts)
-    for prop_name, prop_sec in result.sections.properties.items():
-        sections[f"property:{prop_name}"] = _coverage(prop_sec.items)
-    if result.sections.personal:
-        sections["personal"] = _coverage(result.sections.personal)
-
-    # Ignored: show merchant names and reasons so user can verify at a glance
-    ignored_summary = None
+        sections.append("credit_accounts")
+    for prop_name in result.sections.properties:
+        sections.append(f"property:{prop_name}")
+    if result.sections.unidentified:
+        sections.append("unidentified")
     if result.sections.ignored:
-        auto = [{"name": i.obligation.name, "reason": i.exclusion_reason}
-                for i in result.sections.ignored if i.exclusion_reason in ("transfer", "income")]
-        manual = [{"name": i.obligation.name, "reason": i.exclusion_reason}
-                  for i in result.sections.ignored if i.exclusion_reason not in ("transfer", "income")]
-        ignored_summary = {
-            "auto_skipped": auto, "auto_skipped_count": len(auto),
-            "manually_skipped": manual, "manually_skipped_count": len(manual),
-        }
-
-    # Unclassified: preview top merchant names so user knows the flavor
-    unclassified_preview = None
-    if result.sections.unclassified:
-        unclassified_preview = {
-            "total": len(result.sections.unclassified),
-            "preview": [{"name": i.obligation.name,
-                         "amount": i.evidence.monarch.amount if i.evidence.monarch else None}
-                        for i in result.sections.unclassified[:10]],
-        }
+        sections.append("ignored")
 
     return {
         "inventory_hash": inventory_hash,
         "warnings": [w.model_dump() for w in result.warnings],
-        "accountability": result.accountability.model_dump(),
+        "declared_summary": [s.model_dump() for s in result.declared_summary],
+        "stream_accounting": result.stream_accounting.model_dump(),
         "alerts": [a.model_dump() for a in result.alerts],
         "sections": sections,
-        "ignored": ignored_summary,
-        "unclassified": unclassified_preview,
     }
 
 
@@ -880,7 +853,13 @@ INPUTS:
 - section: from the sections list in build_bill_inventory response
 - inventory_hash: from build_bill_inventory response (rejects if stale)
 
-RETURNS items pre-grouped into three lists:
+AVAILABLE SECTIONS:
+- "credit_accounts" — credit cards and financing accounts
+- "property:<Name>" — bills for a specific property (e.g. "property:Home")
+- "unidentified" — recurring streams not linked to any declared bill; need user decisions
+- "ignored" — streams skipped automatically (transfers, income) or by your choice
+
+RETURNS items pre-grouped into three lists (for credit_accounts and property sections):
 
 "matched" — items that are BOTH declared by the user AND detected in bank data.
   These have the most complete information: the user's declared details (vendor, due day,
@@ -897,10 +876,14 @@ RETURNS items pre-grouped into three lists:
   Could be: a new account, something the user forgot to add, or something to ignore.
   Show what the bank reports and ask the user what to do with it.
 
-For "ignored" sections: groups are "auto_skipped" (transfers, income detected by
+  NOTE for property sections: streams can only be associated with a property when
+  linked directly to a property's bill. Detected only (0) is expected for most
+  properties — unlinked streams appear in the unidentified section instead.
+
+For "ignored" section: groups are "auto_skipped" (transfers, income detected by
 category pattern) and "manually_skipped" (user previously said to ignore).
 
-For "unclassified" sections: single flat list — all need user decisions.
+For "unidentified" section: single flat list — all need user decisions.
 
 NEVER use the words "config", "Monarch", "gap", "linked", "evidence", or "disposition"
 when presenting to the user. Use "declared"/"detected"/"matched" and plain language.
@@ -911,7 +894,7 @@ Only set include_yearly=true when the user specifically asks about yearly bills.
 )
 async def get_inventory_section_tool(
     section: str = Field(
-        description="Section to fetch: 'credit_accounts', 'property:<Name>', 'personal', 'ignored', 'unclassified'"
+        description="Section to fetch: 'credit_accounts', 'property:<Name>', 'unidentified', 'ignored'"
     ),
     inventory_hash: str = Field(
         description="Hash from build_bill_inventory response — prevents stale data"
@@ -941,8 +924,6 @@ async def get_inventory_section_tool(
         if prop_sec is None:
             return {"error": f"Property '{prop_name}' not found. Available: {list(sections_data.get('properties', {}).keys())}"}
         items = prop_sec.get("items", [])
-    elif section == "personal":
-        items = sections_data.get("personal", [])
     elif section == "ignored":
         items = sections_data.get("ignored", [])
         # Group ignored items by reason
@@ -956,13 +937,13 @@ async def get_inventory_section_tool(
             "manually_skipped_count": len(manually_skipped),
             "total": len(items),
         }
-    elif section == "unclassified":
-        items = sections_data.get("unclassified", [])
+    elif section == "unidentified":
+        items = sections_data.get("unidentified", [])
         return {"section": section, "items": items, "count": len(items)}
     else:
         available = ["credit_accounts"]
         available += [f"property:{k}" for k in sections_data.get("properties", {}).keys()]
-        available += ["personal", "ignored", "unclassified"]
+        available += ["unidentified", "ignored"]
         return {"error": f"Unknown section '{section}'. Available: {available}"}
 
     # Filter out yearly items unless requested

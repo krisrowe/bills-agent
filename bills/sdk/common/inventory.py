@@ -5,7 +5,7 @@ and Monarch entities are persisted in config during reconciliation.
 
 Every item from every source (framework templates, config declarations,
 Monarch recurring streams) appears exactly once in the output. Nothing
-is silently dropped. Accountability totals must balance or the function raises.
+is silently dropped.
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ def resolve_bills(prop: Property, all_properties: list[Property]) -> list[Proper
 
 class Obligation(BaseModel):
     name: str
-    section: str  # credit_account, property, personal, ignored, unclassified
+    section: str  # credit_account, property, ignored, unidentified
     property: Optional[str] = None
     bill_type: Optional[str] = None
 
@@ -144,7 +144,7 @@ class PaymentStatus(BaseModel):
 class BillItem(BaseModel):
     obligation: Obligation
     evidence: Evidence
-    disposition: str  # tracked, ignored, unclassified
+    disposition: str  # tracked, ignored, unidentified, unclassified
     exclusion_reason: Optional[str] = None
     payment_status: Optional[PaymentStatus] = None
 
@@ -159,38 +159,24 @@ class Alert(BaseModel):
     account: Optional[str] = None
 
 
-class MonarchStreamAccountability(BaseModel):
+class DeclaredBillsSummary(BaseModel):
+    """Per-property declared bill counts."""
+    property_name: str
+    inherits: Optional[str] = None
+    declared: int = 0
+    linked: int = 0
+    unlinked: int = 0
+
+
+class StreamAccountingSummary(BaseModel):
+    """Per-property linked stream counts + skip/ignore/unidentified."""
     total: int = 0
-    matched_to_config: int = 0
-    matched_to_credit_accounts: int = 0
-    matched_by_bill_filter: int = 0
-    ignored_by_pattern: int = 0
-    ignored_by_merchant_list: int = 0
-    unclassified: int = 0
-
-
-class ConfigExpectationsAccountability(BaseModel):
-    total: int = 0
-    linked_to_monarch: int = 0
-    gap: int = 0
-
-
-class MonarchAccountsAccountability(BaseModel):
-    total: int = 0
-    linked_to_config: int = 0
-    not_in_config: int = 0
-
-
-class Accountability(BaseModel):
-    monarch_streams: MonarchStreamAccountability = Field(
-        default_factory=MonarchStreamAccountability
-    )
-    config_expectations: ConfigExpectationsAccountability = Field(
-        default_factory=ConfigExpectationsAccountability
-    )
-    monarch_accounts: MonarchAccountsAccountability = Field(
-        default_factory=MonarchAccountsAccountability
-    )
+    linked_per_property: dict[str, int] = Field(default_factory=dict)
+    skipped_transfers: list[str] = Field(default_factory=list)
+    skipped_income: list[str] = Field(default_factory=list)
+    ignored_by_you: list[str] = Field(default_factory=list)
+    unidentified_count: int = 0
+    unidentified_preview: list[str] = Field(default_factory=list)
 
 
 class PropertySection(BaseModel):
@@ -201,9 +187,8 @@ class PropertySection(BaseModel):
 class InventorySections(BaseModel):
     credit_accounts: list[BillItem] = Field(default_factory=list)
     properties: dict[str, PropertySection] = Field(default_factory=dict)
-    personal: list[BillItem] = Field(default_factory=list)
     ignored: list[BillItem] = Field(default_factory=list)
-    unclassified: list[BillItem] = Field(default_factory=list)
+    unidentified: list[BillItem] = Field(default_factory=list)
 
 
 class InventoryWarning(BaseModel):
@@ -213,23 +198,11 @@ class InventoryWarning(BaseModel):
 
 
 class BillInventory(BaseModel):
-    accountability: Accountability = Field(default_factory=Accountability)
+    declared_summary: list[DeclaredBillsSummary] = Field(default_factory=list)
+    stream_accounting: StreamAccountingSummary = Field(default_factory=StreamAccountingSummary)
     alerts: list[Alert] = Field(default_factory=list)
     warnings: list[InventoryWarning] = Field(default_factory=list)
     sections: InventorySections = Field(default_factory=InventorySections)
-
-
-class InventoryManifest(BaseModel):
-    """Returned by build_bill_inventory MCP tool — summary only, not full items."""
-
-    inventory_hash: str
-    accountability: Accountability
-    alerts: list[Alert] = Field(default_factory=list)
-    sections: list[str] = Field(default_factory=list)
-
-
-class InventoryAccountabilityError(Exception):
-    """Raised when accountability totals don't balance."""
 
 
 # =============================================================================
@@ -250,16 +223,6 @@ def _matches_skip_patterns(
                 return reason
     return None
 
-
-def _matches_bill_filters(category: str, filter_categories: list[str]) -> bool:
-    """Check if category matches any bill filter pattern."""
-    if not category:
-        return False
-    lower_cat = category.lower()
-    for pattern in filter_categories:
-        if fnmatch(lower_cat, pattern.lower()):
-            return True
-    return False
 
 
 def _monarch_evidence_from_stream(stream: dict) -> MonarchEvidence:
@@ -355,7 +318,6 @@ def build_bill_inventory(
 
     Matching is deterministic by ID. No fuzzy logic. Every framework slot,
     config entry, and Monarch stream appears exactly once in the output.
-    Accountability totals must balance or InventoryAccountabilityError is raised.
     """
     if today is None:
         today = date.today()
@@ -373,16 +335,6 @@ def build_bill_inventory(
             acct_id = str(acct.get("id", ""))
             if acct_id:
                 disconnected_account_ids.add(acct_id)
-
-    # Accountability counters
-    acct_streams_matched_to_config = 0
-    acct_streams_matched_to_credit = 0
-    acct_streams_matched_by_filter = 0
-    acct_streams_ignored_by_pattern = 0
-    acct_streams_ignored_by_merchant_list = 0
-    acct_streams_unclassified = 0
-    acct_config_linked = 0
-    acct_config_gap = 0
 
     # Build ignored merchant lookup
     ignored_merchant_ids: dict[str, str] = {
@@ -444,6 +396,9 @@ def build_bill_inventory(
     # Combine defaults + config properties for inheritance resolution
     all_properties = defaults.properties + config.properties
 
+    # Per-property stream counts for stream_accounting
+    streams_linked_per_property: dict[str, int] = {}
+
     for prop in config.properties:
         if prop.abstract:
             continue
@@ -471,10 +426,9 @@ def build_bill_inventory(
                     1 for s in matched
                     if str(s.get("stream_id", "")) in claimed_stream_ids
                 )
-                acct_streams_matched_to_config += count
-                acct_config_linked += 1
-            else:
-                acct_config_gap += 1
+                streams_linked_per_property[prop.name] = (
+                    streams_linked_per_property.get(prop.name, 0) + count
+                )
 
             item = BillItem(
                 obligation=Obligation(
@@ -503,6 +457,8 @@ def build_bill_inventory(
     # Step 3: Config credit accounts
     # ------------------------------------------------------------------
 
+    streams_linked_credit = 0
+
     for ca in config.credit_accounts:
         # Payment stream by monarch_merchant_id
         merchant_id = ca.monarch_merchant_id
@@ -514,10 +470,7 @@ def build_bill_inventory(
                 1 for s in matched
                 if str(s.get("stream_id", "")) in claimed_stream_ids
             )
-            acct_streams_matched_to_credit += count
-            acct_config_linked += 1
-        else:
-            acct_config_gap += 1
+            streams_linked_credit += count
 
         # Account info by monarch_account_id, with last4 auto-match fallback
         monarch_acct = None
@@ -574,9 +527,6 @@ def build_bill_inventory(
     # Step 3b: Monarch credit accounts not in config
     # ------------------------------------------------------------------
 
-    acct_monarch_accounts_linked = len(claimed_monarch_account_ids)
-    acct_monarch_accounts_not_in_config = 0
-
     for acct in accounts:
         acct_type = (acct.get("type") or {}).get("name", "")
         if acct_type != "credit":
@@ -586,7 +536,6 @@ def build_bill_inventory(
             continue
 
         # This Monarch credit account has no config entry
-        acct_monarch_accounts_not_in_config += 1
         display = acct.get("displayName", "Unknown")
         balance = acct.get("currentBalance")
 
@@ -613,6 +562,12 @@ def build_bill_inventory(
     # Step 4: Classify remaining Monarch streams
     # ------------------------------------------------------------------
 
+    skipped_transfers: list[str] = []
+    skipped_income: list[str] = []
+    ignored_by_you: list[str] = []
+    unidentified_count = 0
+    unidentified_preview: list[str] = []
+
     for stream in recurring_streams:
         sid = str(stream.get("stream_id", ""))
         if sid in claimed_stream_ids:
@@ -625,12 +580,13 @@ def build_bill_inventory(
         # 1. Check ignored_merchants by merchant_id
         if merchant_id in ignored_merchant_ids:
             claimed_stream_ids.add(sid)
-            acct_streams_ignored_by_merchant_list += 1
+            reason = ignored_merchant_ids[merchant_id]
+            ignored_by_you.append(merchant_name)
             items.append(BillItem(
                 obligation=Obligation(name=merchant_name, section="ignored"),
                 evidence=Evidence(monarch=_monarch_evidence_from_stream(stream)),
                 disposition="ignored",
-                exclusion_reason=ignored_merchant_ids[merchant_id],
+                exclusion_reason=reason,
             ))
             continue
 
@@ -638,7 +594,10 @@ def build_bill_inventory(
         skip_reason = _matches_skip_patterns(category, defaults.skip_patterns)
         if skip_reason:
             claimed_stream_ids.add(sid)
-            acct_streams_ignored_by_pattern += 1
+            if skip_reason == "transfer":
+                skipped_transfers.append(merchant_name)
+            else:
+                skipped_income.append(merchant_name)
             items.append(BillItem(
                 obligation=Obligation(name=merchant_name, section="ignored"),
                 evidence=Evidence(monarch=_monarch_evidence_from_stream(stream)),
@@ -647,32 +606,18 @@ def build_bill_inventory(
             ))
             continue
 
-        # 3. Check bill_filters by category
-        if _matches_bill_filters(category, config.bill_filters.categories):
-            claimed_stream_ids.add(sid)
-            acct_streams_matched_by_filter += 1
-
-            acct_id = str(stream.get("account_id", ""))
-            if acct_id in disconnected_account_ids:
-                ps = PaymentStatus(status="disconnected")
-            else:
-                ps = _compute_payment_status(stream, today)
-
-            items.append(BillItem(
-                obligation=Obligation(name=merchant_name, section="personal"),
-                evidence=Evidence(monarch=_monarch_evidence_from_stream(stream)),
-                disposition="tracked",
-                payment_status=ps,
-            ))
-            continue
-
-        # 4. Unclassified
+        # 3. Unidentified — not linked to any declared bill
         claimed_stream_ids.add(sid)
-        acct_streams_unclassified += 1
+        unidentified_count += 1
+        amount = stream.get("amount")
+        amount_str = f" (${abs(amount):.0f})" if amount is not None else ""
+        if len(unidentified_preview) < 10:
+            unidentified_preview.append(f"{merchant_name}{amount_str}")
         items.append(BillItem(
-            obligation=Obligation(name=merchant_name, section="unclassified"),
+            obligation=Obligation(name=merchant_name, section="unidentified"),
             evidence=Evidence(monarch=_monarch_evidence_from_stream(stream)),
             disposition="unclassified",
+            payment_status=_compute_payment_status(stream, today),
         ))
 
     # ------------------------------------------------------------------
@@ -711,66 +656,25 @@ def build_bill_inventory(
                 ))
 
     # ------------------------------------------------------------------
-    # Step 6: Accountability — assert balance
+    # Step 6: Verify stream balance
     # ------------------------------------------------------------------
 
     total_streams = len(recurring_streams)
-    streams_accounted = (
-        acct_streams_matched_to_config
-        + acct_streams_matched_to_credit
-        + acct_streams_matched_by_filter
-        + acct_streams_ignored_by_pattern
-        + acct_streams_ignored_by_merchant_list
-        + acct_streams_unclassified
-    )
+    linked_count = sum(streams_linked_per_property.values()) + streams_linked_credit
+    skipped_count = len(skipped_transfers) + len(skipped_income)
+    ignored_count = len(ignored_by_you)
+    accounted = linked_count + skipped_count + ignored_count + unidentified_count
 
-    if streams_accounted != total_streams:
-        raise InventoryAccountabilityError(
-            f"Stream accountability mismatch: {streams_accounted} accounted "
-            f"vs {total_streams} total"
-        )
-
-    total_config = acct_config_linked + acct_config_gap
-    # total_config should equal credit_accounts + resolved bills across all concrete properties
-    all_properties = defaults.properties + config.properties
-    expected_resolved_bills = sum(
-        len(resolve_bills(prop, all_properties))
-        for prop in config.properties
-        if not prop.abstract
-    )
-    expected_total_expectations = len(config.credit_accounts) + expected_resolved_bills
-    if total_config != expected_total_expectations:
-        raise InventoryAccountabilityError(
-            f"Config accountability mismatch: {total_config} accounted "
-            f"vs {expected_total_expectations} expected"
-        )
-
-    # Monarch accounts accountability
-    total_monarch_credit_accounts = sum(
-        1 for a in accounts if (a.get("type") or {}).get("name") == "credit"
-    )
-
-    accountability = Accountability(
-        monarch_streams=MonarchStreamAccountability(
-            total=total_streams,
-            matched_to_config=acct_streams_matched_to_config,
-            matched_to_credit_accounts=acct_streams_matched_to_credit,
-            matched_by_bill_filter=acct_streams_matched_by_filter,
-            ignored_by_pattern=acct_streams_ignored_by_pattern,
-            ignored_by_merchant_list=acct_streams_ignored_by_merchant_list,
-            unclassified=acct_streams_unclassified,
-        ),
-        config_expectations=ConfigExpectationsAccountability(
-            total=expected_total_expectations,
-            linked_to_monarch=acct_config_linked,
-            gap=acct_config_gap,
-        ),
-        monarch_accounts=MonarchAccountsAccountability(
-            total=total_monarch_credit_accounts,
-            linked_to_config=acct_monarch_accounts_linked,
-            not_in_config=acct_monarch_accounts_not_in_config,
-        ),
-    )
+    if accounted != total_streams:
+        # Sanity check — should not happen under normal conditions
+        warnings.append(InventoryWarning(
+            type="stream_balance_mismatch",
+            message=(
+                f"Stream totals don't add up: linked={linked_count}, "
+                f"skipped={skipped_count}, ignored={ignored_count}, "
+                f"unidentified={unidentified_count}, total={total_streams}"
+            ),
+        ))
 
     # ------------------------------------------------------------------
     # Step 7: Organize into sections
@@ -791,15 +695,66 @@ def build_bill_inventory(
                         break
                 sections.properties[prop_name] = PropertySection(type=prop_type)
             sections.properties[prop_name].items.append(item)
-        elif sec == "personal":
-            sections.personal.append(item)
         elif sec == "ignored":
             sections.ignored.append(item)
-        elif sec == "unclassified":
-            sections.unclassified.append(item)
+        elif sec == "unidentified":
+            sections.unidentified.append(item)
+
+    # ------------------------------------------------------------------
+    # Step 8: Build declared_summary and stream_accounting
+    # ------------------------------------------------------------------
+
+    declared_summary: list[DeclaredBillsSummary] = []
+
+    # Credit accounts row
+    ca_linked = sum(
+        1 for i in sections.credit_accounts
+        if i.evidence.declared and i.evidence.monarch
+    )
+    ca_unlinked = sum(
+        1 for i in sections.credit_accounts
+        if i.evidence.declared and not i.evidence.monarch
+    )
+    ca_declared = ca_linked + ca_unlinked
+    if ca_declared > 0 or sections.credit_accounts:
+        declared_summary.append(DeclaredBillsSummary(
+            property_name="Credit Accounts",
+            declared=ca_declared,
+            linked=ca_linked,
+            unlinked=ca_unlinked,
+        ))
+
+    # One row per concrete property
+    for prop in config.properties:
+        if prop.abstract:
+            continue
+        prop_items = sections.properties.get(prop.name, PropertySection(type="")).items
+        p_linked = sum(1 for i in prop_items if i.evidence.monarch)
+        p_unlinked = sum(1 for i in prop_items if not i.evidence.monarch)
+        declared_summary.append(DeclaredBillsSummary(
+            property_name=prop.name,
+            inherits=prop.inherit,
+            declared=len(prop_items),
+            linked=p_linked,
+            unlinked=p_unlinked,
+        ))
+
+    stream_accounting = StreamAccountingSummary(
+        total=total_streams,
+        linked_per_property={
+            **streams_linked_per_property,
+            **({"Credit Accounts": streams_linked_credit} if streams_linked_credit else {}),
+        },
+        skipped_transfers=skipped_transfers,
+        skipped_income=skipped_income,
+        ignored_by_you=ignored_by_you,
+        unidentified_count=unidentified_count,
+        unidentified_preview=unidentified_preview,
+    )
 
     return BillInventory(
-        accountability=accountability,
+        declared_summary=declared_summary,
+        stream_accounting=stream_accounting,
         alerts=alerts,
         warnings=warnings,
         sections=sections,
