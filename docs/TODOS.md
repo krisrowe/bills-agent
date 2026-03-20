@@ -64,13 +64,161 @@ The recurring query returns category per occurrence, not per merchant. But we do
 
 ## Data Model / Config
 
-### D1: Design principle in CONTRIBUTING.md
-**Problem:** No documented principle about preferring Monarch's native data constructs over pattern matching.
-**Fix:** Add to CONTRIBUTING.md design principles: "Prefer Monarch's data model constructs (category groups, account types) over pattern matching on user-customized category names. Patterns are a last resort for things Monarch's model doesn't classify."
+### D1: Design principle in CONTRIBUTING.md — DONE
+Added in commit 92eb5a6.
 
-### D2: Update design doc (temp/) to reflect current state
-**Problem:** `temp/design-complete-accountability.md` is out of date — doesn't reflect cached inventory, pre-grouped sections, declared/detected/matched terminology, or the phase reordering (report before reconcile).
-**Fix:** Rewrite or retire. The code + SKILL.md + CONTRIBUTING.md are the living docs now.
+### D2: Retire temp/design-complete-accountability.md
+Out of date. The code + SKILL.md + CONTRIBUTING.md are the living docs now.
+
+### D3: Unified config model with inheritance and per-property overrides
+
+**Problem:** Multiple design issues with the current config model:
+- `has_mortgage` is a special-case flag for something that should be a regular bill
+- Framework slot name matching is brittle ("Electric/Gas" != "Electric + Gas")
+- Personal type has no template, gets false mortgage injection
+- PropertyBill stores amounts/due dates that go stale (Monarch has them live)
+- Property types live in a separate `property_types` dict, different structure from properties
+- No way to share config across properties of the same type without repeating
+
+**Design (confirmed 2026-03-20):**
+
+Templates are abstract properties. Concrete properties inherit from them. Everything is
+in one `properties` array. No separate `property_types` section.
+
+Package defaults (`bills/sdk/common/defaults.yaml`):
+```yaml
+properties:
+  - name: real_estate
+    abstract: true
+    bills:
+      - name: Mortgage
+      - name: Property Tax
+
+  - name: residence
+    abstract: true
+    inherit: real_estate
+    bills:
+      - name: Electric/Gas
+      - name: Water/Trash
+      - name: Internet
+      - name: Home Insurance
+
+  - name: rental_vacation
+    abstract: true
+    inherit: real_estate
+    bills:
+      - name: Electric
+      - name: Water
+      - name: Trash
+      - name: Internet
+      - name: Insurance
+      - name: Management
+
+  - name: rental_longterm
+    abstract: true
+    inherit: real_estate
+    bills:
+      - name: Insurance
+
+  - name: land
+    abstract: true
+    bills:
+      - name: Property Tax
+
+  - name: personal
+    abstract: true
+    bills:
+      - name: Housing
+      - name: Phone
+      - name: Auto Insurance
+```
+
+User config (`~/.config/bills/config.yaml`):
+```yaml
+properties:
+  - name: Lake House
+    inherit: rental_vacation
+    funding_account: "1234"
+    bills:
+      - name: Management
+        exclude: true
+      - name: Mortgage
+        vendor: Mortgage Co
+
+  - name: Back 40
+    inherit: land
+    bills:
+      - name: Mortgage
+        exclude: true
+      - name: Property Tax
+        vendor: County Tax Office
+
+  - name: Personal
+    inherit: personal
+    bills:
+      - name: Housing
+        exclude: true
+      - name: Recurring Payment
+        vendor: Vendor
+```
+
+Users can stack custom abstracts for shared config:
+```yaml
+  - name: my_str
+    abstract: true
+    inherit: rental_vacation
+    bills:
+      - name: Management
+        exclude: true
+
+  - name: Lake House
+    inherit: my_str
+    funding_account: "1234"
+
+  - name: Mountain Cabin
+    inherit: my_str
+    funding_account: "5678"
+```
+
+**Merge semantics:**
+- Arrays everywhere (properties and bills) — supports natural names with spaces/punctuation
+- Merge by `name` field at both levels (~20 lines of custom merge code)
+- Package defaults provide abstract templates, user config provides concrete properties
+- User config can also patch abstract templates (declare same name, fields merge)
+- Per-property bills: match by name to inherited slots, patch only declared fields
+- `exclude: true` removes an inherited bill for this property
+- Unmatched bill entries are additions (HOA, HELOC, etc.)
+- Fields NOT stored in config: amount, due_date, last_paid, payment_status (all from Monarch)
+- `abstract` defaults to false — user properties are concrete unless explicitly abstract
+
+**What this eliminates:**
+- `has_mortgage` flag — mortgage is a regular bill, exclude if not applicable
+- `property_types` dict — templates are just abstract properties
+- Stale amounts/due dates in config
+- Special-case code for personal type
+- Separate defaults.yaml format vs config.yaml format
+
+**What this replaces on Property model:**
+- `type` field → `inherit` field
+- `has_mortgage` field → removed (mortgage is a bill entry)
+- `property_types` on BillsConfig → removed
+- `PropertyTypeTemplate` / `ExpectedBillSlot` models → removed
+
+### D4: Property-level funding_account
+**Problem:** Stream-to-property assignment requires knowing which bank account belongs to
+which property. Currently inferred from bill-level `funding_account` fields.
+**Fix:** Add `funding_account` to Property. Inventory function uses it to auto-assign
+unclaimed Monarch streams to properties by matching `account_id`. Bill-level
+`funding_account` overrides for bills paid from a different account.
+
+### D5: Slot-based matching instead of name-based
+**Problem:** Framework slot matching by display name breaks on "Electric/Gas" vs "Electric + Gas".
+**Fix:** Add optional `slot` field to bill entries. When present, match by slot. When absent,
+fall back to name matching. Long-term: all template bills have slots, user bills reference them.
+
+### D6: P1/P2/P3 implemented
+P1 (section summary table), P2 (ignored transparency), P3 (unclassified preview) were
+implemented in commit ba7201e.
 
 ---
 
