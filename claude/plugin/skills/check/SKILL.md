@@ -60,36 +60,13 @@ Then call:
 - `build_bill_inventory(recurring_streams, accounts)` — returns a manifest with:
   - `inventory_hash` — needed to fetch sections
   - `alerts` — urgent items (overdue, promo deadlines, credential problems)
-  - `sections` — per-section coverage counts (declared/detected/matched per section)
-  - `ignored` — merchant names and reasons for auto-skipped and manually-skipped items
-  - `unclassified` — count + preview of top merchant names
+  - `declared_summary` — per-property declared bill counts (declared, linked, unlinked)
+  - `stream_accounting` — how all Monarch streams were distributed
+  - `sections` — list of available section names to fetch
 
-## Phase 1: Definitions + Summary Table + Alerts
+## Phase 1: Alerts + Declared Bills Summary
 
-**Start every bill check by defining terms:**
-
-"This report compares two sources:
-- **Declared** = bills and accounts you told us about
-- **Detected** = recurring payments found in your connected bank data
-- **Matched** = both declared AND detected — we can verify payment status"
-
-**Then show the summary table from the manifest's `sections` data:**
-
-| Section | Declared | Detected | Matched | Declared Only | Detected Only | Flags |
-|---------|----------|----------|---------|---------------|---------------|-------|
-
-Each row comes from `sections[name]`. The Flags column shows overdue/due_soon/disconnected
-counts if nonzero. This gives the user a complete map before any detail.
-
-**Then show ignored and unclassified summaries inline:**
-
-For ignored, show the merchant names from the manifest's `ignored` field:
-"Automatically skipped: [name] ([reason]), [name] ([reason])... You told us to ignore: [name], ..."
-
-For unclassified, show the preview:
-"[N] items need your input: [name], [name], [name]..."
-
-**Then present alerts** — these need immediate attention:
+**Present alerts first** — these need immediate attention:
 
 **Overdue payments** — a bill that should have been paid this cycle but wasn't.
 Show: what bill, how much, when it was due, which account.
@@ -105,7 +82,15 @@ For each promo, calculate:
 **Credential problems** — Monarch can't sync an account because the bank login needs refresh.
 Show: which institution, which accounts are affected, what we can't verify because of it.
 
-## Phase 2: Section-by-Section Review
+**Then show the declared bills summary table from `declared_summary`:**
+
+| Property | Inherits | Declared | Linked | Unlinked |
+|----------|----------|----------|--------|---------|
+
+Each row is one property or credit accounts. "Linked" means a bank stream was found.
+"Unlinked" means the bill exists in your list but no bank stream is connected.
+
+## Phase 2: Property Detail Sections + Stream Accounting
 
 Fetch each section via `get_inventory_section(section, inventory_hash)`.
 Present one section at a time. After each section, offer to fix problems before moving on.
@@ -176,23 +161,40 @@ Note if this bill was inherited from the property's template (no vendor/details 
 for this property but you haven't declared them as bills."
 For each: show merchant name, amount, category, account, payment status.
 
+Note: Detected only (0) is expected for most properties — streams can only be associated
+with a property when linked directly to a property's bill, and will then appear in the
+linked list, else not at all for that property.
+
 **After presenting**, offer to connect declared-only items to detected recurring payments.
 
 ---
 
-### Personal Section
+### Stream Accounting Summary
 
-Fetch `get_inventory_section("personal", hash)`. Response has pre-grouped lists.
+After all property and credit account sections, present the stream accounting from
+`stream_accounting` in the manifest:
 
-**Section header:**
-"PERSONAL BILLS — You declared [declared_total]. Bank detected [detected_total].
-[matched_count] matched. [declared_only_count] declared only. [detected_only_count] detected only."
+"STREAM ACCOUNTING — [total] total bank streams
+- [linked_per_property totals] linked to declared bills
+- [skipped_transfers count] internal transfers skipped automatically: [names]
+- [skipped_income count] income streams skipped automatically: [names]
+- [ignored_by_you count] you told us to ignore: [names]
+- [unidentified_count] need your input (see unidentified section below)"
 
-**Matched** — declared and detected. Show payment status.
-**Declared only** — you told us but can't verify.
-**Detected only** — bank sees recurring payments in bill-like categories (mortgage,
-insurance, utilities, phone) that you haven't declared. May already be covered under
-a property, or may need to be added.
+---
+
+### Unidentified Section
+
+Fetch `get_inventory_section("unidentified", hash)`.
+
+These are bank recurring payments we couldn't associate with any declared bill. Present each one:
+
+| # | Merchant | Amount | Frequency | Category | Account |
+
+For each: "What should we do with this?"
+- **"It's a bill"** → register as property bill with merchant ID pre-linked
+- **"Ignore it"** → `add_ignored_merchant(merchant_id, name, reason)`
+- **"It's junk in Monarch"** → help deactivate via `update_recurring`
 
 ---
 
@@ -202,43 +204,12 @@ Fetch `get_inventory_section("ignored", hash)`.
 
 Present as a compact summary — don't list every item unless the user asks:
 
-"We automatically skipped [N] Monarch streams:
+"We automatically skipped [N] bank streams:
 - [X] internal bank transfers
 - [Y] income (payroll, interest)
 - [Z] items you previously told us to ignore (subscriptions, etc.)
 
 These don't affect your bill status. Say the word if you want to see the full list."
-
----
-
-### Unclassified Section
-
-Fetch `get_inventory_section("unclassified", hash)`.
-
-These are Monarch recurring payments we couldn't categorize. Present each one:
-
-| # | Merchant | Amount | Frequency | Category | Account |
-
-For each: "What should we do with this?"
-- **"It's a bill"** → register as property bill or personal bill with merchant ID pre-linked
-- **"Ignore it"** → `add_ignored_merchant(merchant_id, name, reason)`
-- **"It's junk in Monarch"** → help deactivate via `update_recurring`
-
----
-
-### Coverage Summary
-
-After all sections, present a plain-language summary using the same terms:
-
-"Across all sections: you declared [X] bills/accounts. Bank detected [Y] recurring payments.
-- [A] matched (both declared and detected — we can verify these)
-- [B] declared only (you told us but we can't find in bank data)
-- [C] detected only (bank sees it but you haven't told us about it)
-- [D] automatically skipped (internal transfers, income)
-- [E] you previously told us to ignore (subscriptions, etc.)
-- [F] need your input (couldn't categorize)
-
-All [Y] bank items accounted for. All [X] declared items accounted for."
 
 ---
 
