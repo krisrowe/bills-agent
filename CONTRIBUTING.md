@@ -224,6 +224,53 @@ Neither config nor Monarch alone tells the full story. Config without Monarch ca
 
 If you own a property, you expect certain bills (mortgage, water, electric, trash, insurance). If one stops showing up in Monarch, that's a signal — not something to ignore. Property declarations are the "minimum viable bill set" for each property.
 
+### Prefer Monarch's Data Model Over Pattern Matching
+
+When classifying recurring streams (income, transfer, expense), prefer Monarch's native
+data model constructs (category groups, account types) over pattern matching on
+user-customized category names. Patterns are fragile — they break when users rename
+categories and aren't portable. Category `group.type` (income/transfer/expense) is a
+Monarch system-level classification that works universally. See `docs/TODOS.md` A2.
+
+### Persist Only What Monarch Can't Provide
+
+Config should store information Monarch doesn't know: property types, mortgage status,
+which property a bill belongs to, who manages it, payment method. It should NOT duplicate
+data Monarch provides live: amounts, due dates, vendor names, payment status. These go
+stale. The config is the human-knowledge layer; Monarch is the live-data layer.
+
+### Stream-to-Property Assignment via Funding Accounts
+
+Each property can have a dedicated bank account (funding_account). When a Monarch stream's
+account matches a property's funding account, the stream belongs to that property. This is
+deterministic and requires no fuzzy matching. For users with property-specific accounts,
+this auto-assigns most streams without user input. For users with shared accounts, streams
+fall through to manual classification.
+
+### Bill Configuration: Current vs Future
+
+**Current:** PropertyBill entries store vendor, amount, due_day, payment_method,
+funding_account, managed_by, and monarch_merchant_id. Bills are declared explicitly or
+created by the agent during reconciliation.
+
+**Future direction:** May evolve to a thinner `merchant_slots` mapping — just
+`{merchant_id: slot_name}` per property, plus optional overrides (managed_by,
+payment_method). Everything else comes from Monarch live. This eliminates stale config
+but requires the merchant-to-slot association to be persisted since Monarch categories
+don't distinguish electric from water from trash within the same category group.
+
+**Alternatives considered and rejected:**
+
+- *Restructuring Monarch categories* to map to framework slots. Rejected: couples
+  Monarch's tax-reporting category structure to this tool's needs. Not portable.
+
+- *Fully automatic bill discovery* with zero config. Rejected: category groups distinguish
+  income/transfer/expense but can't distinguish which utility is which within a property.
+  Merchant-to-slot mapping requires human judgment at least once.
+
+- *Auto-creating config entries on first check*. Rejected: makes one run special, creates
+  entries that go stale. Better to derive fresh and only persist the merchant association.
+
 ## Future Enhancements
 
 ### CLI-Driven Project Install
