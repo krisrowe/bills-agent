@@ -813,8 +813,8 @@ async def build_bill_inventory_tool(
     # Build per-section coverage counts (same numbers get_inventory_section returns)
     def _coverage(items):
         matched = sum(1 for i in items if i.evidence.config and i.evidence.monarch)
-        declared_only = sum(1 for i in items if i.evidence.config and not i.evidence.monarch)
-        detected_only = sum(1 for i in items if not i.evidence.config and i.evidence.monarch)
+        declared_only = sum(1 for i in items if (i.evidence.config or i.evidence.framework) and not i.evidence.monarch)
+        detected_only = sum(1 for i in items if not i.evidence.config and not i.evidence.framework and i.evidence.monarch)
         return {
             "declared_total": matched + declared_only,
             "detected_total": matched + detected_only,
@@ -974,6 +974,8 @@ async def get_inventory_section_tool(
         yearly_excluded = []
 
     # Group items by source
+    # Framework-only items (from property type) count as declared — the user
+    # declared the property type, the expected bills are their declaration.
     matched = []
     declared_only = []
     detected_only = []
@@ -981,11 +983,12 @@ async def get_inventory_section_tool(
         ev = item.get("evidence", {})
         has_config = ev.get("config") is not None
         has_monarch = ev.get("monarch") is not None
+        has_framework = ev.get("framework") is not None
         if has_config and has_monarch:
             matched.append(item)
-        elif has_config:
+        elif has_config or has_framework:
             declared_only.append(item)
-        else:
+        elif has_monarch:
             detected_only.append(item)
 
     matched_count = len(matched)
