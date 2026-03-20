@@ -104,7 +104,11 @@ class Property(BaseModel):
     name: str = Field(description="Property name, e.g. 'Primary Residence', 'Rental 1'")
     type: str = Field(
         default="residence",
-        description="Type: residence, rental_longterm, rental_vacation, land, personal",
+        description="Type: residence, rental_longterm, rental_vacation, rental, land, personal",
+    )
+    has_mortgage: bool = Field(
+        default=True,
+        description="Whether this property has a mortgage. Set false for paid-off or unfinanced properties.",
     )
     address: Optional[str] = Field(default=None, description="Property address")
     tax_id: Optional[str] = Field(default=None, description="Property tax ID or parcel number")

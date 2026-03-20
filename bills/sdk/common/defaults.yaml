@@ -1,8 +1,6 @@
 property_types:
   residence:
     expected_bills:
-      - slot: mortgage
-        name: Mortgage
       - slot: electric_gas
         name: Electric/Gas
       - slot: water_trash
@@ -16,8 +14,6 @@ property_types:
 
   rental_longterm:
     expected_bills:
-      - slot: mortgage
-        name: Mortgage
       - slot: insurance
         name: Insurance
       - slot: property_tax
@@ -26,8 +22,6 @@ property_types:
 
   rental_vacation:
     expected_bills:
-      - slot: mortgage
-        name: Mortgage
       - slot: electric
         name: Electric
       - slot: water

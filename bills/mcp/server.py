@@ -516,15 +516,33 @@ async def update_property_bill_tool(
 
 
 @mcp.tool(
-    name="update_property",
-    description="""Update property metadata (address, type, tax_id, notes).
+    name="remove_property_bill",
+    description="""Remove a bill from a property.
 
-Use to add or update property information. Only fields you provide are updated.""",
+Use when a bill needs to be moved to a different property, or when a bill
+no longer applies (loan paid off, service cancelled, etc.).""",
+)
+async def remove_property_bill_tool(
+    property_name: str = Field(description="Property name containing the bill"),
+    bill_name: str = Field(description="Bill name to remove"),
+) -> dict:
+    success, message = properties.remove_property_bill(property_name, bill_name)
+    return {"success": success, "message": message}
+
+
+@mcp.tool(
+    name="update_property",
+    description="""Update property metadata (address, type, has_mortgage, tax_id, notes).
+
+Use to add or update property information. Only fields you provide are updated.
+Property types: residence, rental_longterm, rental_vacation, land, personal.
+Set has_mortgage=false for paid-off or unfinanced properties.""",
 )
 async def update_property_tool(
     name: str = Field(description="Property name to update"),
     address: Optional[str] = Field(default=None, description="Full address"),
-    type: Optional[str] = Field(default=None, description="residence, rental, personal"),
+    type: Optional[str] = Field(default=None, description="residence, rental_longterm, rental_vacation, land, personal"),
+    has_mortgage: Optional[bool] = Field(default=None, description="Whether property has a mortgage. False for paid-off or unfinanced."),
     tax_id: Optional[str] = Field(default=None, description="Property tax ID or parcel number"),
     notes: Optional[str] = Field(default=None, description="Property-specific notes"),
 ) -> dict:
@@ -532,6 +550,7 @@ async def update_property_tool(
         name,
         address=address,
         type=type,
+        has_mortgage=has_mortgage,
         tax_id=tax_id,
         notes=notes,
     )
@@ -791,24 +810,60 @@ async def build_bill_inventory_tool(
     # Compute hash for stale guard
     inventory_hash = hashlib.sha256(result_json.encode()).hexdigest()[:12]
 
-    # Build section list with item counts
-    section_list = []
+    # Build per-section coverage counts (same numbers get_inventory_section returns)
+    def _coverage(items):
+        matched = sum(1 for i in items if i.evidence.config and i.evidence.monarch)
+        declared_only = sum(1 for i in items if i.evidence.config and not i.evidence.monarch)
+        detected_only = sum(1 for i in items if not i.evidence.config and i.evidence.monarch)
+        return {
+            "declared_total": matched + declared_only,
+            "detected_total": matched + detected_only,
+            "matched_count": matched,
+            "declared_only_count": declared_only,
+            "detected_only_count": detected_only,
+            "overdue": sum(1 for i in items if i.payment_status and i.payment_status.status == "overdue"),
+            "due_soon": sum(1 for i in items if i.payment_status and i.payment_status.status == "due_soon"),
+            "disconnected": sum(1 for i in items if i.payment_status and i.payment_status.status == "disconnected"),
+        }
+
+    sections = {}
     if result.sections.credit_accounts:
-        section_list.append(f"credit_accounts ({len(result.sections.credit_accounts)} items)")
+        sections["credit_accounts"] = _coverage(result.sections.credit_accounts)
     for prop_name, prop_sec in result.sections.properties.items():
-        section_list.append(f"property:{prop_name} ({len(prop_sec.items)} items)")
+        sections[f"property:{prop_name}"] = _coverage(prop_sec.items)
     if result.sections.personal:
-        section_list.append(f"personal ({len(result.sections.personal)} items)")
+        sections["personal"] = _coverage(result.sections.personal)
+
+    # Ignored: show merchant names and reasons so user can verify at a glance
+    ignored_summary = None
     if result.sections.ignored:
-        section_list.append(f"ignored ({len(result.sections.ignored)} items)")
+        auto = [{"name": i.obligation.name, "reason": i.exclusion_reason}
+                for i in result.sections.ignored if i.exclusion_reason in ("transfer", "income")]
+        manual = [{"name": i.obligation.name, "reason": i.exclusion_reason}
+                  for i in result.sections.ignored if i.exclusion_reason not in ("transfer", "income")]
+        ignored_summary = {
+            "auto_skipped": auto, "auto_skipped_count": len(auto),
+            "manually_skipped": manual, "manually_skipped_count": len(manual),
+        }
+
+    # Unclassified: preview top merchant names so user knows the flavor
+    unclassified_preview = None
     if result.sections.unclassified:
-        section_list.append(f"unclassified ({len(result.sections.unclassified)} items)")
+        unclassified_preview = {
+            "total": len(result.sections.unclassified),
+            "preview": [{"name": i.obligation.name,
+                         "amount": i.evidence.monarch.amount if i.evidence.monarch else None}
+                        for i in result.sections.unclassified[:10]],
+        }
 
     return {
         "inventory_hash": inventory_hash,
+        "warnings": [w.model_dump() for w in result.warnings],
         "accountability": result.accountability.model_dump(),
         "alerts": [a.model_dump() for a in result.alerts],
-        "sections": section_list,
+        "sections": sections,
+        "ignored": ignored_summary,
+        "unclassified": unclassified_preview,
     }
 
 
@@ -845,7 +900,11 @@ category pattern) and "manually_skipped" (user previously said to ignore).
 For "unclassified" sections: single flat list — all need user decisions.
 
 NEVER use the words "config", "Monarch", "gap", "linked", "evidence", or "disposition"
-when presenting to the user. Use "declared"/"detected"/"matched" and plain language.""",
+when presenting to the user. Use "declared"/"detected"/"matched" and plain language.
+
+include_yearly defaults to false. Yearly items (property tax, annual insurance, etc.)
+are excluded by default to keep the report focused on regular monthly/biweekly obligations.
+Only set include_yearly=true when the user specifically asks about yearly bills.""",
 )
 async def get_inventory_section_tool(
     section: str = Field(
@@ -853,6 +912,10 @@ async def get_inventory_section_tool(
     ),
     inventory_hash: str = Field(
         description="Hash from build_bill_inventory response — prevents stale data"
+    ),
+    include_yearly: bool = Field(
+        default=False,
+        description="Include yearly recurring items. Default false — excludes yearly to focus on regular obligations."
     ),
 ) -> dict:
     cache_path = _inventory_cache_path()
@@ -899,6 +962,17 @@ async def get_inventory_section_tool(
         available += ["personal", "ignored", "unclassified"]
         return {"error": f"Unknown section '{section}'. Available: {available}"}
 
+    # Filter out yearly items unless requested
+    if not include_yearly:
+        def _is_yearly(item):
+            ev = item.get("evidence", {})
+            monarch = ev.get("monarch") or {}
+            return monarch.get("frequency") == "yearly"
+        yearly_excluded = [i for i in items if _is_yearly(i)]
+        items = [i for i in items if not _is_yearly(i)]
+    else:
+        yearly_excluded = []
+
     # Group items by source
     matched = []
     declared_only = []
@@ -918,7 +992,7 @@ async def get_inventory_section_tool(
     declared_only_count = len(declared_only)
     detected_only_count = len(detected_only)
 
-    return {
+    result = {
         "section": section,
         "declared_total": matched_count + declared_only_count,
         "detected_total": matched_count + detected_only_count,
@@ -929,6 +1003,9 @@ async def get_inventory_section_tool(
         "detected_only": detected_only,
         "detected_only_count": detected_only_count,
     }
+    if yearly_excluded:
+        result["yearly_excluded_count"] = len(yearly_excluded)
+    return result
 
 
 # =============================================================================

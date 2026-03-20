@@ -41,6 +41,7 @@ def update_property(
     *,
     address: Optional[str] = None,
     type: Optional[str] = None,
+    has_mortgage: Optional[bool] = None,
     tax_id: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> tuple[bool, str | Property]:
@@ -56,6 +57,8 @@ def update_property(
                 prop.address = address
             if type is not None:
                 prop.type = type
+            if has_mortgage is not None:
+                prop.has_mortgage = has_mortgage
             if tax_id is not None:
                 prop.tax_id = tax_id
             if notes is not None:
@@ -77,6 +80,7 @@ def register_property_bill(
     payment_method: str = "manual",
     funding_account: Optional[str] = None,
     type: str = "residence",
+    has_mortgage: bool = True,
     managed_by: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> tuple[bool, str | PropertyBill]:
@@ -97,7 +101,7 @@ def register_property_bill(
             break
 
     if prop is None:
-        prop = Property(name=property_name, type=type)
+        prop = Property(name=property_name, type=type, has_mortgage=has_mortgage)
         config.properties.append(prop)
         prop_idx = len(config.properties) - 1
 
@@ -170,5 +174,30 @@ def update_property_bill(
             config.properties[i] = prop
             save_config(config)
             return True, bill
+
+    return False, f"No bill '{bill_name}' on property '{property_name}'"
+
+
+def remove_property_bill(
+    property_name: str,
+    bill_name: str,
+) -> tuple[bool, str]:
+    """Remove a bill from a property.
+
+    Returns (success, message).
+    """
+    config = load_config()
+
+    for i, prop in enumerate(config.properties):
+        if prop.name.lower() != property_name.lower():
+            continue
+        for j, bill in enumerate(prop.bills):
+            if bill.name.lower() != bill_name.lower():
+                continue
+
+            prop.bills.pop(j)
+            config.properties[i] = prop
+            save_config(config)
+            return True, f"Removed '{bill_name}' from {property_name}"
 
     return False, f"No bill '{bill_name}' on property '{property_name}'"

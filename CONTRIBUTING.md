@@ -147,9 +147,26 @@ Four phases:
 
 Walks through a credit card's transaction history in segments (between payments/statement dates), showing large charges individually and small charges summarized, with running balance reconciliation.
 
-## Releasing Changes
+## Development Loop
 
-When making changes to the plugin (skills, MCP tools, config models):
+### Testing locally (no commit/push needed)
+
+For skill changes (SKILL.md) — just restart Claude Code with the local plugin:
+```bash
+claude --plugin-dir ~/ws/bills-agent/claude/plugin
+```
+
+For SDK/MCP code changes (inventory.py, server.py, etc.) — also reinstall the package:
+```bash
+pipx install --force .
+claude --plugin-dir ~/ws/bills-agent/claude/plugin
+```
+
+This loads the plugin directly from your working tree. No commit, no push, no marketplace update. Iterate until it works, then release.
+
+### Releasing Changes
+
+When ready to ship (skills, MCP tools, config models):
 
 1. Make your code changes
 2. Run tests: `python -m pytest tests/`
