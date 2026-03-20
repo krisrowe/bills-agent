@@ -34,14 +34,13 @@ def _defaults() -> AppDefaults:
         property_types={
             "residence": PropertyTypeTemplate(
                 expected_bills=[
-                    ExpectedBillSlot(slot="mortgage", name="Mortgage"),
                     ExpectedBillSlot(slot="electric_gas", name="Electric/Gas"),
                     ExpectedBillSlot(slot="water_trash", name="Water/Trash"),
+                    ExpectedBillSlot(slot="property_tax", name="Property Tax"),
                 ]
             ),
             "rental_longterm": PropertyTypeTemplate(
                 expected_bills=[
-                    ExpectedBillSlot(slot="mortgage", name="Mortgage"),
                     ExpectedBillSlot(slot="insurance", name="Insurance"),
                     ExpectedBillSlot(slot="property_tax", name="Property Tax"),
                 ]
@@ -177,11 +176,11 @@ class TestAccountabilityBalances:
         assert ms.unclassified == 1            # Mystery
 
         ce = result.accountability.config_expectations
-        # 3 framework slots (Mortgage+config, Electric/Gas framework-only, Water/Trash framework-only)
-        # + 1 extra config (HOA) + 1 credit account = 5
-        assert ce.total == 5
+        # injected Mortgage+config + 3 framework-only slots (Electric/Gas, Water/Trash, Property Tax)
+        # + 1 extra config (HOA) + 1 credit account = 6
+        assert ce.total == 6
         assert ce.linked_to_monarch == 3  # Mortgage, HOA, Card (all have monarch_merchant_id)
-        assert ce.gap == 2  # Electric/Gas, Water/Trash (framework-only, no config, no link)
+        assert ce.gap == 3  # Electric/Gas, Water/Trash, Property Tax (framework-only, no config, no link)
 
 
 class TestAccountabilityRaisesOnMismatch:
@@ -425,11 +424,28 @@ class TestFrameworkSlots:
         _assert_accountability_balances(result)
 
         items = result.sections.properties["Home"].items
-        assert len(items) == 3  # mortgage, electric_gas, water_trash
+        # mortgage (injected by has_mortgage=True) + 3 template slots = 4
+        assert len(items) == 4
+        slot_names = [i.obligation.bill_type for i in items]
+        assert "mortgage" in slot_names
         for item in items:
             assert item.evidence.framework is not None
             assert item.evidence.config is None
             assert item.payment_status.status == "gap"
+
+    def test_no_mortgage_slot_when_has_mortgage_false(self):
+        config = BillsConfig(
+            properties=[Property(name="Land", type="land", has_mortgage=False)]
+        )
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=[],
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        items = result.sections.properties["Land"].items
+        assert len(items) == 1  # just property_tax
+        assert items[0].obligation.bill_type == "property_tax"
 
     def test_extra_config_bill_outside_framework(self):
         config = BillsConfig(
@@ -702,6 +718,6 @@ class TestLoadDefaults:
     def test_residence_has_expected_slots(self):
         defaults = load_defaults()
         slots = [s.slot for s in defaults.property_types["residence"].expected_bills]
-        assert "mortgage" in slots
+        assert "mortgage" not in slots  # mortgage is injected by has_mortgage flag, not in template
         assert "electric_gas" in slots
         assert "property_tax" in slots

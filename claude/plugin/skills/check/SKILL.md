@@ -60,12 +60,36 @@ Then call:
 - `build_bill_inventory(recurring_streams, accounts)` — returns a manifest with:
   - `inventory_hash` — needed to fetch sections
   - `alerts` — urgent items (overdue, promo deadlines, credential problems)
-  - `accountability` — coverage numbers
-  - `sections` — list of available sections to fetch
+  - `sections` — per-section coverage counts (declared/detected/matched per section)
+  - `ignored` — merchant names and reasons for auto-skipped and manually-skipped items
+  - `unclassified` — count + preview of top merchant names
 
-## Phase 1: Present Alerts
+## Phase 1: Definitions + Summary Table + Alerts
 
-Present alerts FIRST — these need immediate attention:
+**Start every bill check by defining terms:**
+
+"This report compares two sources:
+- **Declared** = bills and accounts you told us about
+- **Detected** = recurring payments found in your connected bank data
+- **Matched** = both declared AND detected — we can verify payment status"
+
+**Then show the summary table from the manifest's `sections` data:**
+
+| Section | Declared | Detected | Matched | Declared Only | Detected Only | Flags |
+|---------|----------|----------|---------|---------------|---------------|-------|
+
+Each row comes from `sections[name]`. The Flags column shows overdue/due_soon/disconnected
+counts if nonzero. This gives the user a complete map before any detail.
+
+**Then show ignored and unclassified summaries inline:**
+
+For ignored, show the merchant names from the manifest's `ignored` field:
+"Automatically skipped: [name] ([reason]), [name] ([reason])... You told us to ignore: [name], ..."
+
+For unclassified, show the preview:
+"[N] items need your input: [name], [name], [name]..."
+
+**Then present alerts** — these need immediate attention:
 
 **Overdue payments** — a bill that should have been paid this cycle but wasn't.
 Show: what bill, how much, when it was due, which account.

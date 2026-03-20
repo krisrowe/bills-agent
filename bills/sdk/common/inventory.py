@@ -170,9 +170,16 @@ class InventorySections(BaseModel):
     unclassified: list[BillItem] = Field(default_factory=list)
 
 
+class InventoryWarning(BaseModel):
+    type: str  # unrecognized_property_type, etc.
+    property: Optional[str] = None
+    message: str
+
+
 class BillInventory(BaseModel):
     accountability: Accountability = Field(default_factory=Accountability)
     alerts: list[Alert] = Field(default_factory=list)
+    warnings: list[InventoryWarning] = Field(default_factory=list)
     sections: InventorySections = Field(default_factory=InventorySections)
 
 
@@ -318,6 +325,7 @@ def build_bill_inventory(
         today = date.today()
 
     items: list[BillItem] = []
+    warnings: list[InventoryWarning] = []
     claimed_stream_ids: set[str] = set()
     streams_by_merchant = _build_streams_by_merchant(recurring_streams)
 
@@ -400,7 +408,19 @@ def build_bill_inventory(
     for prop in config.properties:
         prop_type = prop.type
         template = defaults.property_types.get(prop_type)
-        framework_slots = template.expected_bills if template else []
+        if template is None and prop_type != "personal":
+            warnings.append(InventoryWarning(
+                type="unrecognized_property_type",
+                property=prop.name,
+                message=f"Property type '{prop_type}' has no framework template. "
+                f"Expected bills cannot be determined. "
+                f"Update the property type to one of: residence, rental_longterm, rental_vacation, land.",
+            ))
+        framework_slots = list(template.expected_bills) if template else []
+
+        # Inject mortgage slot based on has_mortgage flag (orthogonal to property type)
+        if prop.has_mortgage:
+            framework_slots.insert(0, ExpectedBillSlot(slot="mortgage", name="Mortgage"))
         matched_config_bills: set[str] = set()
 
         # Framework slots
@@ -735,14 +755,17 @@ def build_bill_inventory(
         len(prop.bills) for prop in config.properties
     )
     # Framework-only slots (no config bill) also count as gaps
+    # Must mirror the same logic used in the main loop (template + has_mortgage injection)
     framework_only_count = 0
     for prop in config.properties:
         template = defaults.property_types.get(prop.type)
-        if template:
-            config_bill_names = {b.name.lower() for b in prop.bills}
-            for slot in template.expected_bills:
-                if slot.name.lower() not in config_bill_names:
-                    framework_only_count += 1
+        slots = list(template.expected_bills) if template else []
+        if prop.has_mortgage:
+            slots.insert(0, ExpectedBillSlot(slot="mortgage", name="Mortgage"))
+        config_bill_names = {b.name.lower() for b in prop.bills}
+        for slot in slots:
+            if slot.name.lower() not in config_bill_names:
+                framework_only_count += 1
 
     expected_total_expectations = expected_config + framework_only_count
     if total_config != expected_total_expectations:
@@ -808,5 +831,6 @@ def build_bill_inventory(
     return BillInventory(
         accountability=accountability,
         alerts=alerts,
+        warnings=warnings,
         sections=sections,
     )
