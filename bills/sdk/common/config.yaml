@@ -1,0 +1,50 @@
+# Base real estate — covers raw land. Extend for improved properties.
+properties:
+  - name: real_estate
+    abstract: true
+    bills:
+      - name: Mortgage
+      - name: Property Tax
+
+  - name: residence
+    abstract: true
+    inherit: real_estate
+    bills:
+      - name: Electric/Gas
+      - name: Water/Trash
+      - name: Internet
+      - name: Home Insurance
+
+  - name: rental_longterm
+    abstract: true
+    inherit: real_estate
+    bills:
+      - name: Insurance
+
+  - name: rental_vacation
+    abstract: true
+    inherit: real_estate
+    bills:
+      - name: Electric
+      - name: Water
+      - name: Trash
+      - name: Internet
+      - name: Insurance
+      - name: Management
+
+  - name: personal
+    bills:
+      - name: Housing
+      - name: Phone
+      - name: Auto Insurance
+
+skip_patterns:
+  transfer:
+    category_patterns:
+      - "*Transfer*"
+      - "Same Bank Transfer*"
+  income:
+    category_patterns:
+      - "*Salary*"
+      - "*Net Pay*"
+      - "Interest"

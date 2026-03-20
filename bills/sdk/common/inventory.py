@@ -26,14 +26,7 @@ from .config import BillsConfig
 # =============================================================================
 
 
-class ExpectedBillSlot(BaseModel):
-    slot: str
-    name: str
-
-
-class PropertyTypeTemplate(BaseModel):
-    expected_bills: list[ExpectedBillSlot] = Field(default_factory=list)
-    note: Optional[str] = None
+from .config import Property, PropertyBill
 
 
 class SkipPatternGroup(BaseModel):
@@ -41,16 +34,65 @@ class SkipPatternGroup(BaseModel):
 
 
 class AppDefaults(BaseModel):
-    property_types: dict[str, PropertyTypeTemplate] = Field(default_factory=dict)
+    properties: list[Property] = Field(default_factory=list)
     skip_patterns: dict[str, SkipPatternGroup] = Field(default_factory=dict)
 
 
-def load_defaults() -> AppDefaults:
-    """Load app defaults from the bundled defaults.yaml."""
-    defaults_path = Path(__file__).parent / "defaults.yaml"
+def load_package_config() -> AppDefaults:
+    """Load the package-level config (abstract templates, skip patterns)."""
+    defaults_path = Path(__file__).parent / "config.yaml"
     with open(defaults_path) as f:
         data = yaml.safe_load(f) or {}
     return AppDefaults.model_validate(data)
+
+
+def resolve_bills(prop: Property, all_properties: list[Property]) -> list[PropertyBill]:
+    """Resolve a property's full bill list by applying inheritance and overrides.
+
+    1. If prop.inherit is set, recursively resolve the parent's bills
+    2. Merge prop.bills on top: match by name patches, unmatched adds
+    3. Bills with exclude=True are removed
+    """
+    # Start with inherited bills
+    inherited: list[PropertyBill] = []
+    if prop.inherit:
+        parent = next((p for p in all_properties if p.name == prop.inherit), None)
+        if parent:
+            inherited = resolve_bills(parent, all_properties)
+
+    # Build name-indexed copy of inherited bills
+    merged: dict[str, PropertyBill] = {b.name.lower(): b.model_copy() for b in inherited}
+
+    # Apply this property's bills on top
+    for bill in prop.bills:
+        key = bill.name.lower()
+        if key in merged:
+            # Patch: only override fields that are explicitly set
+            existing = merged[key]
+            if bill.exclude:
+                del merged[key]
+                continue
+            if bill.vendor is not None:
+                existing.vendor = bill.vendor
+            if bill.monarch_merchant_id is not None:
+                existing.monarch_merchant_id = bill.monarch_merchant_id
+            if bill.due_day is not None:
+                existing.due_day = bill.due_day
+            if bill.amount is not None:
+                existing.amount = bill.amount
+            if bill.payment_method is not None:
+                existing.payment_method = bill.payment_method
+            if bill.funding_account is not None:
+                existing.funding_account = bill.funding_account
+            if bill.managed_by is not None:
+                existing.managed_by = bill.managed_by
+            if bill.notes is not None:
+                existing.notes = bill.notes
+        else:
+            if not bill.exclude:
+                merged[key] = bill.model_copy()
+
+    return list(merged.values())
 
 
 # =============================================================================
@@ -65,13 +107,8 @@ class Obligation(BaseModel):
     bill_type: Optional[str] = None
 
 
-class FrameworkEvidence(BaseModel):
-    expected: bool = True
-    property_type: str
-
-
-class ConfigEvidence(BaseModel):
-    declared: bool = True
+class DeclaredEvidence(BaseModel):
+    """Evidence that this bill was declared — inherited from a template, explicitly configured, or both."""
     vendor: Optional[str] = None
     monarch_merchant_id: Optional[str] = None
     due_day: Optional[int] = None
@@ -93,8 +130,7 @@ class MonarchEvidence(BaseModel):
 
 
 class Evidence(BaseModel):
-    framework: Optional[FrameworkEvidence] = None
-    config: Optional[ConfigEvidence] = None
+    declared: Optional[DeclaredEvidence] = None
     monarch: Optional[MonarchEvidence] = None
 
 
@@ -402,85 +438,30 @@ def build_bill_inventory(
             monarch_credit_by_mask.setdefault(mask, []).append(acct)
 
     # ------------------------------------------------------------------
-    # Step 1+2: Framework slots + config bills, matched by ID
+    # Step 1+2: Resolve bills per property via inheritance, match by ID
     # ------------------------------------------------------------------
 
+    # Combine defaults + config properties for inheritance resolution
+    all_properties = defaults.properties + config.properties
+
     for prop in config.properties:
-        prop_type = prop.type
-        template = defaults.property_types.get(prop_type)
-        if template is None and prop_type != "personal":
-            warnings.append(InventoryWarning(
-                type="unrecognized_property_type",
-                property=prop.name,
-                message=f"Property type '{prop_type}' has no framework template. "
-                f"Expected bills cannot be determined. "
-                f"Update the property type to one of: residence, rental_longterm, rental_vacation, land.",
-            ))
-        framework_slots = list(template.expected_bills) if template else []
+        if prop.abstract:
+            continue
 
-        # Inject mortgage slot based on has_mortgage flag (orthogonal to property type)
-        if prop.has_mortgage:
-            framework_slots.insert(0, ExpectedBillSlot(slot="mortgage", name="Mortgage"))
-        matched_config_bills: set[str] = set()
+        # Resolve full bill list through inheritance chain
+        resolved = resolve_bills(prop, all_properties)
 
-        # Framework slots
-        for slot in framework_slots:
-            config_bill = None
-            for bill in prop.bills:
-                if bill.name.lower() == slot.name.lower():
-                    config_bill = bill
-                    matched_config_bills.add(bill.name.lower())
-                    break
-
-            merchant_id = config_bill.monarch_merchant_id if config_bill else None
-            payment, monarch_ev = _payment_status_for_merchant(merchant_id)
-
-            # Count claimed streams
-            if merchant_id and monarch_ev:
-                matched = streams_by_merchant.get(merchant_id, [])
-                count = sum(
-                    1 for s in matched
-                    if str(s.get("stream_id", "")) in claimed_stream_ids
-                )
-                acct_streams_matched_to_config += count
-                acct_config_linked += 1
-            else:
-                acct_config_gap += 1
-
-            item = BillItem(
-                obligation=Obligation(
-                    name=slot.name,
-                    section="property",
+        if not resolved and prop.inherit:
+            parent = next((p for p in all_properties if p.name == prop.inherit), None)
+            if parent is None:
+                warnings.append(InventoryWarning(
+                    type="unresolved_inherit",
                     property=prop.name,
-                    bill_type=slot.slot,
-                ),
-                evidence=Evidence(
-                    framework=FrameworkEvidence(property_type=prop_type),
-                    config=(
-                        ConfigEvidence(
-                            vendor=config_bill.vendor,
-                            monarch_merchant_id=config_bill.monarch_merchant_id,
-                            due_day=config_bill.due_day,
-                            amount=config_bill.amount,
-                            payment_method=config_bill.payment_method,
-                            funding_account=config_bill.funding_account,
-                            managed_by=config_bill.managed_by,
-                        )
-                        if config_bill
-                        else None
-                    ),
-                    monarch=monarch_ev,
-                ),
-                disposition="tracked",
-                payment_status=payment,
-            )
-            items.append(item)
+                    message=f"Property inherits from '{prop.inherit}' but no template "
+                    f"with that name was found.",
+                ))
 
-        # Extra config bills not in framework
-        for bill in prop.bills:
-            if bill.name.lower() in matched_config_bills:
-                continue
-
+        for bill in resolved:
             merchant_id = bill.monarch_merchant_id
             payment, monarch_ev = _payment_status_for_merchant(merchant_id)
 
@@ -502,7 +483,7 @@ def build_bill_inventory(
                     property=prop.name,
                 ),
                 evidence=Evidence(
-                    config=ConfigEvidence(
+                    declared=DeclaredEvidence(
                         vendor=bill.vendor,
                         monarch_merchant_id=bill.monarch_merchant_id,
                         due_day=bill.due_day,
@@ -576,7 +557,7 @@ def build_bill_inventory(
                 section="credit_account",
             ),
             evidence=Evidence(
-                config=ConfigEvidence(
+                declared=DeclaredEvidence(
                     monarch_merchant_id=ca.monarch_merchant_id,
                     due_day=ca.due_day,
                     payment_method=ca.payment_method,
@@ -750,29 +731,18 @@ def build_bill_inventory(
         )
 
     total_config = acct_config_linked + acct_config_gap
-    # total_config should equal credit_accounts + all property bills
-    expected_config = len(config.credit_accounts) + sum(
-        len(prop.bills) for prop in config.properties
+    # total_config should equal credit_accounts + resolved bills across all concrete properties
+    all_properties = defaults.properties + config.properties
+    expected_resolved_bills = sum(
+        len(resolve_bills(prop, all_properties))
+        for prop in config.properties
+        if not prop.abstract
     )
-    # Framework-only slots (no config bill) also count as gaps
-    # Must mirror the same logic used in the main loop (template + has_mortgage injection)
-    framework_only_count = 0
-    for prop in config.properties:
-        template = defaults.property_types.get(prop.type)
-        slots = list(template.expected_bills) if template else []
-        if prop.has_mortgage:
-            slots.insert(0, ExpectedBillSlot(slot="mortgage", name="Mortgage"))
-        config_bill_names = {b.name.lower() for b in prop.bills}
-        for slot in slots:
-            if slot.name.lower() not in config_bill_names:
-                framework_only_count += 1
-
-    expected_total_expectations = expected_config + framework_only_count
+    expected_total_expectations = len(config.credit_accounts) + expected_resolved_bills
     if total_config != expected_total_expectations:
         raise InventoryAccountabilityError(
             f"Config accountability mismatch: {total_config} accounted "
-            f"vs {expected_total_expectations} expected "
-            f"({expected_config} config entries + {framework_only_count} framework-only slots)"
+            f"vs {expected_total_expectations} expected"
         )
 
     # Monarch accounts accountability
@@ -814,10 +784,10 @@ def build_bill_inventory(
         elif sec == "property":
             prop_name = item.obligation.property or "Unknown"
             if prop_name not in sections.properties:
-                prop_type = "residence"
+                prop_type = "unknown"
                 for p in config.properties:
                     if p.name == prop_name:
-                        prop_type = p.type
+                        prop_type = p.inherit or "unknown"
                         break
                 sections.properties[prop_name] = PropertySection(type=prop_type)
             sections.properties[prop_name].items.append(item)

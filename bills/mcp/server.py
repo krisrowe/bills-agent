@@ -31,7 +31,7 @@ import json as json_mod
 
 from ..sdk.common import accounts, budget, filters, ignored, properties
 from ..sdk.common.config import get_config_path, get_data_dir, load_config
-from ..sdk.common.inventory import build_bill_inventory, load_defaults
+from ..sdk.common.inventory import build_bill_inventory, load_package_config
 
 mcp = FastMCP("bills")
 
@@ -379,7 +379,8 @@ async def register_funding_account_tool(
 
 Call during Phase 1 after credit accounts. Returns properties with:
 - name: identifier (e.g. 'Primary Residence', 'Rental 1')
-- type: residence, rental, personal
+- inherit: template name (residence, rental_vacation, etc.)
+- abstract: true if this is a template
 - address: full address if known
 - bills: array of property bills (see list_property_bills for details)
 
@@ -440,7 +441,7 @@ Recommended: due_day, payment_method, funding_account
 
 For non-property bills (T-Mobile, insurance), use property_name='Personal' with type='personal'.
 
-Property types: residence, rental, personal
+Templates: residence, rental_vacation, rental_longterm, real_estate, personal
 
 For bills managed by someone else (e.g., spouse), set managed_by.
 These are still monitored for problems but not tracked in detail.
@@ -455,7 +456,7 @@ async def register_property_bill_tool(
     amount: Optional[float] = Field(default=None, description="Expected amount"),
     payment_method: str = Field(default="manual", description="auto_draft, auto_pay, manual"),
     funding_account: Optional[str] = Field(default=None, description="Last4 of funding account"),
-    type: str = Field(default="residence", description="residence, rental, personal", alias="type"),
+    inherit: Optional[str] = Field(default=None, description="Template to inherit from: residence, rental_vacation, rental_longterm, real_estate, personal"),
     managed_by: Optional[str] = Field(default=None, description="Who manages this bill (e.g., 'spouse')"),
     notes: Optional[str] = Field(default=None, description="Bill-specific notes"),
 ) -> dict:
@@ -467,7 +468,7 @@ async def register_property_bill_tool(
         amount=amount,
         payment_method=payment_method,
         funding_account=funding_account,
-        type=type,
+        inherit=inherit,
         managed_by=managed_by,
         notes=notes,
     )
@@ -532,25 +533,27 @@ async def remove_property_bill_tool(
 
 @mcp.tool(
     name="update_property",
-    description="""Update property metadata (address, type, has_mortgage, tax_id, notes).
+    description="""Update property metadata (inherit, abstract, funding_account, address, tax_id, notes).
 
 Use to add or update property information. Only fields you provide are updated.
-Property types: residence, rental_longterm, rental_vacation, land, personal.
-Set has_mortgage=false for paid-off or unfinanced properties.""",
+Set inherit to a template name (residence, rental_vacation, rental_longterm, real_estate, personal).
+Set abstract=true to make this a template that other properties can inherit from.""",
 )
 async def update_property_tool(
     name: str = Field(description="Property name to update"),
+    inherit: Optional[str] = Field(default=None, description="Template to inherit from"),
+    abstract: Optional[bool] = Field(default=None, description="If true, this is a template, not a real property"),
+    funding_account: Optional[str] = Field(default=None, description="Default funding account last4 for this property's bills"),
     address: Optional[str] = Field(default=None, description="Full address"),
-    type: Optional[str] = Field(default=None, description="residence, rental_longterm, rental_vacation, land, personal"),
-    has_mortgage: Optional[bool] = Field(default=None, description="Whether property has a mortgage. False for paid-off or unfinanced."),
     tax_id: Optional[str] = Field(default=None, description="Property tax ID or parcel number"),
     notes: Optional[str] = Field(default=None, description="Property-specific notes"),
 ) -> dict:
     success, result = properties.update_property(
         name,
+        inherit=inherit,
+        abstract=abstract,
+        funding_account=funding_account,
         address=address,
-        type=type,
-        has_mortgage=has_mortgage,
         tax_id=tax_id,
         notes=notes,
     )
@@ -793,7 +796,7 @@ async def build_bill_inventory_tool(
     ),
 ) -> dict:
     config = load_config()
-    defaults = load_defaults()
+    defaults = load_package_config()
     result = build_bill_inventory(
         config=config,
         recurring_streams=recurring_streams,
@@ -812,9 +815,9 @@ async def build_bill_inventory_tool(
 
     # Build per-section coverage counts (same numbers get_inventory_section returns)
     def _coverage(items):
-        matched = sum(1 for i in items if i.evidence.config and i.evidence.monarch)
-        declared_only = sum(1 for i in items if (i.evidence.config or i.evidence.framework) and not i.evidence.monarch)
-        detected_only = sum(1 for i in items if not i.evidence.config and not i.evidence.framework and i.evidence.monarch)
+        matched = sum(1 for i in items if i.evidence.declared and i.evidence.monarch)
+        declared_only = sum(1 for i in items if i.evidence.declared and not i.evidence.monarch)
+        detected_only = sum(1 for i in items if not i.evidence.declared and i.evidence.monarch)
         return {
             "declared_total": matched + declared_only,
             "detected_total": matched + detected_only,
@@ -981,10 +984,9 @@ async def get_inventory_section_tool(
     detected_only = []
     for item in items:
         ev = item.get("evidence", {})
-        has_config = ev.get("config") is not None
+        has_declared = ev.get("declared") is not None
         has_monarch = ev.get("monarch") is not None
-        has_framework = ev.get("framework") is not None
-        if has_config and has_monarch:
+        if has_declared and has_monarch:
             matched.append(item)
         elif has_config or has_framework:
             declared_only.append(item)

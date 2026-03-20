@@ -15,12 +15,10 @@ from bills.sdk.common.config import (
 )
 from bills.sdk.common.inventory import (
     AppDefaults,
-    ExpectedBillSlot,
     InventoryAccountabilityError,
-    PropertyTypeTemplate,
     SkipPatternGroup,
     build_bill_inventory,
-    load_defaults,
+    load_package_config,
 )
 
 
@@ -31,26 +29,34 @@ from bills.sdk.common.inventory import (
 
 def _defaults() -> AppDefaults:
     return AppDefaults(
-        property_types={
-            "residence": PropertyTypeTemplate(
-                expected_bills=[
-                    ExpectedBillSlot(slot="electric_gas", name="Electric/Gas"),
-                    ExpectedBillSlot(slot="water_trash", name="Water/Trash"),
-                    ExpectedBillSlot(slot="property_tax", name="Property Tax"),
-                ]
+        properties=[
+            Property(
+                name="residence",
+                abstract=True,
+                bills=[
+                    PropertyBill(name="Mortgage"),
+                    PropertyBill(name="Electric/Gas"),
+                    PropertyBill(name="Water/Trash"),
+                    PropertyBill(name="Property Tax"),
+                ],
             ),
-            "rental_longterm": PropertyTypeTemplate(
-                expected_bills=[
-                    ExpectedBillSlot(slot="insurance", name="Insurance"),
-                    ExpectedBillSlot(slot="property_tax", name="Property Tax"),
-                ]
+            Property(
+                name="rental_longterm",
+                abstract=True,
+                bills=[
+                    PropertyBill(name="Mortgage"),
+                    PropertyBill(name="Insurance"),
+                    PropertyBill(name="Property Tax"),
+                ],
             ),
-            "land": PropertyTypeTemplate(
-                expected_bills=[
-                    ExpectedBillSlot(slot="property_tax", name="Property Tax"),
-                ]
+            Property(
+                name="land",
+                abstract=True,
+                bills=[
+                    PropertyBill(name="Property Tax"),
+                ],
             ),
-        },
+        ],
         skip_patterns={
             "transfer": SkipPatternGroup(
                 category_patterns=["*Transfer*", "Same Bank Transfer*"]
@@ -136,7 +142,7 @@ class TestAccountabilityBalances:
             properties=[
                 Property(
                     name="Home",
-                    type="residence",
+                    inherit="residence",
                     bills=[
                         PropertyBill(name="Mortgage", vendor="LoanCo", monarch_merchant_id="M1"),
                         PropertyBill(name="HOA", vendor="HOA Board", monarch_merchant_id="M2"),
@@ -176,11 +182,13 @@ class TestAccountabilityBalances:
         assert ms.unclassified == 1            # Mystery
 
         ce = result.accountability.config_expectations
-        # injected Mortgage+config + 3 framework-only slots (Electric/Gas, Water/Trash, Property Tax)
-        # + 1 extra config (HOA) + 1 credit account = 6
+        # inherited: Mortgage + Electric/Gas + Water/Trash + Property Tax = 4
+        # Mortgage is patched (M1 linked), HOA is extra (M2 linked)
+        # Electric/Gas, Water/Trash, Property Tax = 3 gaps
+        # + 1 credit account (M3 linked) = 6 total
         assert ce.total == 6
-        assert ce.linked_to_monarch == 3  # Mortgage, HOA, Card (all have monarch_merchant_id)
-        assert ce.gap == 3  # Electric/Gas, Water/Trash, Property Tax (framework-only, no config, no link)
+        assert ce.linked_to_monarch == 3  # Mortgage, HOA, Card
+        assert ce.gap == 3  # Electric/Gas, Water/Trash, Property Tax
 
 
 class TestAccountabilityRaisesOnMismatch:
@@ -205,7 +213,7 @@ class TestIdBasedMatching:
         config = BillsConfig(
             properties=[
                 Property(
-                    name="Home", type="residence",
+                    name="Home", inherit="residence",
                     bills=[PropertyBill(name="Mortgage", vendor="LoanCo", monarch_merchant_id="M1")],
                 )
             ]
@@ -250,7 +258,7 @@ class TestIdBasedMatching:
         config = BillsConfig(
             properties=[
                 Property(
-                    name="Home", type="residence",
+                    name="Home", inherit="residence",
                     bills=[PropertyBill(name="Mortgage", vendor="LoanCo")],  # no monarch_merchant_id
                 )
             ]
@@ -272,7 +280,7 @@ class TestIdBasedMatching:
         config = BillsConfig(
             properties=[
                 Property(
-                    name="Home", type="residence",
+                    name="Home", inherit="residence",
                     bills=[PropertyBill(name="Mortgage", vendor="LoanCo", monarch_merchant_id="M999")],
                 )
             ]
@@ -302,7 +310,7 @@ class TestMultipleStreamsPerMerchant:
         config = BillsConfig(
             properties=[
                 Property(
-                    name="Home", type="residence",
+                    name="Home", inherit="residence",
                     bills=[PropertyBill(name="Mortgage", vendor="LoanCo", monarch_merchant_id="M1")],
                 )
             ]
@@ -408,14 +416,15 @@ class TestStreamClassification:
 
 
 # =============================================================================
-# Framework Slots
+# Inheritance and Bill Resolution
 # =============================================================================
 
 
-class TestFrameworkSlots:
-    def test_framework_gaps_when_no_config_no_monarch(self):
+class TestInheritanceAndResolution:
+    def test_inherited_bills_appear_when_no_config_no_monarch(self):
+        """Property inheriting from residence gets all template bills as gaps."""
         config = BillsConfig(
-            properties=[Property(name="Home", type="residence")]
+            properties=[Property(name="Home", inherit="residence")]
         )
         result = build_bill_inventory(
             config=config, recurring_streams=[], accounts=[],
@@ -424,18 +433,24 @@ class TestFrameworkSlots:
         _assert_accountability_balances(result)
 
         items = result.sections.properties["Home"].items
-        # mortgage (injected by has_mortgage=True) + 3 template slots = 4
+        # residence template has 4 bills: Mortgage, Electric/Gas, Water/Trash, Property Tax
         assert len(items) == 4
-        slot_names = [i.obligation.bill_type for i in items]
-        assert "mortgage" in slot_names
+        bill_names = {i.obligation.name for i in items}
+        assert bill_names == {"Mortgage", "Electric/Gas", "Water/Trash", "Property Tax"}
         for item in items:
-            assert item.evidence.framework is not None
-            assert item.evidence.config is None
+            assert item.evidence.declared is not None
             assert item.payment_status.status == "gap"
 
-    def test_no_mortgage_slot_when_has_mortgage_false(self):
+    def test_excluded_bill_does_not_appear_in_resolved_output(self):
+        """A bill with exclude=True removes the inherited bill from the property."""
         config = BillsConfig(
-            properties=[Property(name="Land", type="land", has_mortgage=False)]
+            properties=[
+                Property(
+                    name="Home",
+                    inherit="residence",
+                    bills=[PropertyBill(name="Mortgage", exclude=True)],
+                )
+            ]
         )
         result = build_bill_inventory(
             config=config, recurring_streams=[], accounts=[],
@@ -443,15 +458,34 @@ class TestFrameworkSlots:
         )
         _assert_accountability_balances(result)
 
-        items = result.sections.properties["Land"].items
-        assert len(items) == 1  # just property_tax
-        assert items[0].obligation.bill_type == "property_tax"
+        items = result.sections.properties["Home"].items
+        bill_names = [i.obligation.name for i in items]
+        assert "Mortgage" not in bill_names
+        assert "Electric/Gas" in bill_names
+        assert "Property Tax" in bill_names
 
-    def test_extra_config_bill_outside_framework(self):
+    def test_land_property_with_only_property_tax(self):
+        """Property inheriting from land template has only Property Tax."""
+        config = BillsConfig(
+            properties=[Property(name="Land Parcel", inherit="land")]
+        )
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=[],
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        items = result.sections.properties["Land Parcel"].items
+        assert len(items) == 1
+        assert items[0].obligation.name == "Property Tax"
+
+    def test_extra_bill_outside_inherited_set(self):
+        """A bill not in the template is added on top of inherited bills."""
         config = BillsConfig(
             properties=[
                 Property(
-                    name="Home", type="residence",
+                    name="Home",
+                    inherit="residence",
                     bills=[PropertyBill(name="HOA", vendor="HOA Board", monarch_merchant_id="M1")],
                 )
             ]
@@ -465,9 +499,160 @@ class TestFrameworkSlots:
 
         items = result.sections.properties["Home"].items
         hoa = next(i for i in items if i.obligation.name == "HOA")
-        assert hoa.evidence.framework is None  # not a framework slot
-        assert hoa.evidence.config is not None
+        assert hoa.evidence.declared is not None
         assert hoa.evidence.monarch is not None
+
+    def test_no_inherit_uses_only_own_bills(self):
+        """A concrete property with no inherit and explicit bills uses exactly those bills."""
+        config = BillsConfig(
+            properties=[
+                Property(
+                    name="Cabin",
+                    bills=[
+                        PropertyBill(name="Electric"),
+                        PropertyBill(name="Property Tax"),
+                    ],
+                )
+            ]
+        )
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=[],
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        items = result.sections.properties["Cabin"].items
+        assert len(items) == 2
+        bill_names = {i.obligation.name for i in items}
+        assert bill_names == {"Electric", "Property Tax"}
+
+
+# =============================================================================
+# Resolve Inheritance
+# =============================================================================
+
+
+class TestResolveInheritance:
+    def test_multi_level_inheritance(self):
+        """A property inheriting rental_vacation gets bills from both real_estate and rental_vacation."""
+        # rental_vacation inherits real_estate; real_estate has Mortgage + Property Tax
+        # rental_vacation adds Electric, Water, Trash, Internet, Insurance, Management
+        defaults = AppDefaults(
+            properties=[
+                Property(
+                    name="real_estate",
+                    abstract=True,
+                    bills=[
+                        PropertyBill(name="Mortgage"),
+                        PropertyBill(name="Property Tax"),
+                    ],
+                ),
+                Property(
+                    name="rental_vacation",
+                    abstract=True,
+                    inherit="real_estate",
+                    bills=[
+                        PropertyBill(name="Electric"),
+                        PropertyBill(name="Water"),
+                        PropertyBill(name="Insurance"),
+                    ],
+                ),
+            ],
+            skip_patterns={},
+        )
+        config = BillsConfig(
+            properties=[Property(name="Beach House", inherit="rental_vacation")]
+        )
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=[],
+            defaults=defaults, today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        items = result.sections.properties["Beach House"].items
+        bill_names = {i.obligation.name for i in items}
+        # Should have both real_estate bills AND rental_vacation bills
+        assert "Mortgage" in bill_names
+        assert "Property Tax" in bill_names
+        assert "Electric" in bill_names
+        assert "Water" in bill_names
+        assert "Insurance" in bill_names
+
+    def test_abstract_properties_skipped_by_inventory(self):
+        """Abstract properties (templates) do not appear as property sections in inventory output."""
+        config = BillsConfig(
+            properties=[
+                Property(
+                    name="MyTemplate",
+                    abstract=True,
+                    bills=[PropertyBill(name="Property Tax")],
+                ),
+                Property(name="Real Property", inherit="MyTemplate"),
+            ]
+        )
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=[],
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        # Abstract template should not appear as a section
+        assert "MyTemplate" not in result.sections.properties
+        # The concrete property should appear
+        assert "Real Property" in result.sections.properties
+
+
+# =============================================================================
+# Exclude Behavior
+# =============================================================================
+
+
+class TestExcludeBehavior:
+    def test_exclude_removes_inherited_bill(self):
+        """A property bill marked exclude=True suppresses the inherited bill."""
+        config = BillsConfig(
+            properties=[
+                Property(
+                    name="Home",
+                    inherit="residence",
+                    bills=[PropertyBill(name="Mortgage", exclude=True)],
+                )
+            ]
+        )
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=[],
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        bill_names = {i.obligation.name for i in result.sections.properties["Home"].items}
+        assert "Mortgage" not in bill_names
+        # Other inherited bills still present
+        assert "Electric/Gas" in bill_names
+        assert "Property Tax" in bill_names
+
+    def test_exclude_on_non_inherited_bill(self):
+        """A locally added bill with exclude=True does not appear in resolved output."""
+        config = BillsConfig(
+            properties=[
+                Property(
+                    name="Cabin",
+                    bills=[
+                        PropertyBill(name="Electric"),
+                        PropertyBill(name="Cable TV", exclude=True),
+                    ],
+                )
+            ]
+        )
+        result = build_bill_inventory(
+            config=config, recurring_streams=[], accounts=[],
+            defaults=_defaults(), today=TODAY,
+        )
+        _assert_accountability_balances(result)
+
+        bill_names = {i.obligation.name for i in result.sections.properties["Cabin"].items}
+        assert "Cable TV" not in bill_names
+        assert "Electric" in bill_names
 
 
 # =============================================================================
@@ -480,7 +665,7 @@ class TestPaymentStatus:
         config = BillsConfig(
             properties=[
                 Property(
-                    name="Home", type="residence",
+                    name="Home", inherit="residence",
                     bills=[PropertyBill(name="Mortgage", vendor="LoanCo", monarch_merchant_id="M1")],
                 )
             ]
@@ -595,7 +780,7 @@ class TestMonarchCreditAccountUnion:
         # Should appear in credit_accounts section
         assert len(result.sections.credit_accounts) == 1
         item = result.sections.credit_accounts[0]
-        assert item.evidence.config is None
+        assert item.evidence.declared is None
         assert item.evidence.monarch is not None
         assert item.disposition == "unclassified"
 
@@ -623,7 +808,7 @@ class TestMonarchCreditAccountUnion:
         # One item, not two
         assert len(result.sections.credit_accounts) == 1
         item = result.sections.credit_accounts[0]
-        assert item.evidence.config is not None
+        assert item.evidence.declared is not None
         assert item.evidence.monarch is not None
 
         # Accountability
@@ -647,10 +832,10 @@ class TestMonarchCreditAccountUnion:
         )
         _assert_accountability_balances(result)
 
-        # Should be one item with both config and monarch evidence
+        # Should be one item with both declared and monarch evidence
         assert len(result.sections.credit_accounts) == 1
         item = result.sections.credit_accounts[0]
-        assert item.evidence.config is not None
+        assert item.evidence.declared is not None
         assert item.evidence.monarch is not None
         assert item.evidence.monarch.account_id == "ACC1"
         assert item.evidence.monarch.amount == -500
@@ -679,12 +864,12 @@ class TestMonarchCreditAccountUnion:
         _assert_accountability_balances(result)
 
         # Config item should NOT auto-match (ambiguous)
-        config_items = [i for i in result.sections.credit_accounts if i.evidence.config is not None]
+        config_items = [i for i in result.sections.credit_accounts if i.evidence.declared is not None]
         assert len(config_items) == 1
         assert config_items[0].evidence.monarch is None  # no match
 
         # Both Monarch accounts should appear as unclassified
-        monarch_only = [i for i in result.sections.credit_accounts if i.evidence.config is None]
+        monarch_only = [i for i in result.sections.credit_accounts if i.evidence.declared is None]
         assert len(monarch_only) == 2
 
     def test_non_credit_accounts_excluded(self):
@@ -701,23 +886,34 @@ class TestMonarchCreditAccountUnion:
 
 
 # =============================================================================
-# Defaults Loading
+# Package Config Loading
 # =============================================================================
 
 
-class TestLoadDefaults:
-    def test_loads_bundled_defaults(self):
-        defaults = load_defaults()
-        assert "residence" in defaults.property_types
-        assert "rental_longterm" in defaults.property_types
-        assert "rental_vacation" in defaults.property_types
-        assert "land" in defaults.property_types
+class TestLoadPackageConfig:
+    def test_loads_bundled_config(self):
+        defaults = load_package_config()
+        template_names = {p.name for p in defaults.properties}
+        assert "residence" in template_names
+        assert "rental_longterm" in template_names
+        assert "rental_vacation" in template_names
         assert "transfer" in defaults.skip_patterns
         assert "income" in defaults.skip_patterns
 
-    def test_residence_has_expected_slots(self):
-        defaults = load_defaults()
-        slots = [s.slot for s in defaults.property_types["residence"].expected_bills]
-        assert "mortgage" not in slots  # mortgage is injected by has_mortgage flag, not in template
-        assert "electric_gas" in slots
-        assert "property_tax" in slots
+    def test_real_estate_templates_are_abstract(self):
+        """The core real-estate templates in the package config are marked abstract."""
+        defaults = load_package_config()
+        template_names = {p.name for p in defaults.properties}
+        abstract_names = {p.name for p in defaults.properties if p.abstract}
+        for name in ("real_estate", "residence", "rental_longterm", "rental_vacation"):
+            assert name in template_names, f"Expected '{name}' in package config"
+            assert name in abstract_names, f"Expected '{name}' to be abstract"
+
+    def test_residence_has_mortgage_and_utilities(self):
+        defaults = load_package_config()
+        residence = next(p for p in defaults.properties if p.name == "residence")
+        # residence inherits from real_estate (which has Mortgage + Property Tax)
+        # and adds Electric/Gas, Water/Trash, Internet, Home Insurance
+        bill_names = {b.name for b in residence.bills}
+        assert "Electric/Gas" in bill_names
+        assert "Mortgage" not in bill_names  # mortgage is in real_estate, not re-declared in residence
