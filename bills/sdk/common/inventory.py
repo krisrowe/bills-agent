@@ -51,7 +51,7 @@ def resolve_bills(prop: Property, all_properties: list[Property]) -> list[Proper
 
     1. If prop.inherit is set, recursively resolve the parent's bills
     2. Merge prop.bills on top: match by name patches, unmatched adds
-    3. Bills with exclude=True are removed
+    3. Bills with deleted=True are removed
     """
     # Start with inherited bills
     inherited: list[PropertyBill] = []
@@ -69,7 +69,7 @@ def resolve_bills(prop: Property, all_properties: list[Property]) -> list[Proper
         if key in merged:
             # Patch: only override fields that are explicitly set
             existing = merged[key]
-            if bill.exclude:
+            if bill.deleted:
                 del merged[key]
                 continue
             if bill.vendor is not None:
@@ -89,7 +89,7 @@ def resolve_bills(prop: Property, all_properties: list[Property]) -> list[Proper
             if bill.notes is not None:
                 existing.notes = bill.notes
         else:
-            if not bill.exclude:
+            if not bill.deleted:
                 merged[key] = bill.model_copy()
 
     return list(merged.values())

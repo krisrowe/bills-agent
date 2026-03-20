@@ -79,7 +79,7 @@ class PropertyBill(BaseModel):
     """A bill associated with a property."""
 
     name: str = Field(description="Bill type, e.g. 'Mortgage', 'Water', 'Trash'")
-    exclude: bool = Field(default=False, description="If true, this inherited bill does not apply to this property")
+    deleted: bool = Field(default=False, description="Internal: tombstone for inherited item removal. Not for interface use.")
     vendor: Optional[str] = Field(default=None, description="Vendor name, e.g. 'Mortgage Company', 'City Water Dept'")
     monarch_merchant_id: Optional[str] = Field(
         default=None, description="Monarch merchant ID for deterministic stream lookup"
@@ -104,6 +104,7 @@ class Property(BaseModel):
 
     name: str = Field(description="Property name, e.g. 'Primary Residence', 'Rental 1'")
     abstract: bool = Field(default=False, description="If true, this is a template, not a real property")
+    deleted: bool = Field(default=False, description="Internal: tombstone for inherited item removal. Not for interface use.")
     inherit: Optional[str] = Field(default=None, description="Name of parent template to inherit bills from")
     funding_account: Optional[str] = Field(default=None, description="Default funding account last4 for this property's bills")
     address: Optional[str] = Field(default=None, description="Property address")
@@ -190,6 +191,6 @@ def save_config(config: BillsConfig) -> None:
     config_path = get_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    data = config.model_dump(exclude_none=True)
+    data = config.model_dump(exclude_defaults=True)
     with open(config_path, "w") as f:
         yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)

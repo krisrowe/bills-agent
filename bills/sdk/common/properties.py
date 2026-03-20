@@ -11,28 +11,25 @@ from .config import (
 from .inventory import load_package_config, resolve_bills
 
 
-class InheritedBillError(Exception):
-    """Raised when attempting to remove an inherited bill. Use exclude instead."""
-
-
 def list_properties(include_abstract: bool = False) -> list[Property]:
-    """List all properties. By default excludes abstract templates."""
+    """List all properties. By default excludes abstract templates and deleted properties."""
     config = load_config()
     if include_abstract:
         defaults = load_package_config()
-        return defaults.properties + config.properties
-    return [p for p in config.properties if not p.abstract]
+        all_props = defaults.properties + config.properties
+        return [p for p in all_props if not p.deleted]
+    return [p for p in config.properties if not p.abstract and not p.deleted]
 
 
 def get_property(name: str) -> Optional[Property]:
     """Get a property by name (case-insensitive). Checks config and defaults."""
     config = load_config()
     for prop in config.properties:
-        if prop.name.lower() == name.lower():
+        if prop.name.lower() == name.lower() and not prop.deleted:
             return prop
     defaults = load_package_config()
     for prop in defaults.properties:
-        if prop.name.lower() == name.lower():
+        if prop.name.lower() == name.lower() and not prop.deleted:
             return prop
     return None
 
@@ -48,12 +45,12 @@ def get_resolved_property(name: str) -> Optional[tuple[Property, list[PropertyBi
 
     prop = None
     for p in config.properties:
-        if p.name.lower() == name.lower():
+        if p.name.lower() == name.lower() and not p.deleted:
             prop = p
             break
     if prop is None:
         for p in defaults.properties:
-            if p.name.lower() == name.lower():
+            if p.name.lower() == name.lower() and not p.deleted:
                 prop = p
                 break
     if prop is None:
@@ -64,7 +61,7 @@ def get_resolved_property(name: str) -> Optional[tuple[Property, list[PropertyBi
 
 
 def list_property_bills(property_name: str) -> tuple[Optional[Property], list[PropertyBill]]:
-    """List resolved bills for a property (inheritance applied).
+    """List declared bills for a property (inheritance applied).
 
     Returns (property_or_none, resolved_bills).
     """
@@ -139,12 +136,12 @@ def register_property_bill(
     inherit: Optional[str] = None,
     managed_by: Optional[str] = None,
     monarch_merchant_id: Optional[str] = None,
-    exclude: bool = False,
     notes: Optional[str] = None,
 ) -> tuple[bool, str | PropertyBill]:
     """Register a new property bill.
 
-    Creates property if it doesn't exist.
+    Creates property if it doesn't exist. If the bill was previously deleted
+    (tombstone), removes the tombstone and creates fresh.
     Returns (success, bill_or_error).
     """
     config = load_config()
@@ -163,9 +160,12 @@ def register_property_bill(
         config.properties.append(prop)
         prop_idx = len(config.properties) - 1
 
-    # Check for duplicate bill
-    for bill in prop.bills:
+    # Check for existing bill — if deleted tombstone, remove it first
+    for j, bill in enumerate(prop.bills):
         if bill.name.lower() == bill_name.lower():
+            if bill.deleted:
+                prop.bills.pop(j)
+                break
             return False, f"Bill '{bill_name}' already exists for {property_name}"
 
     new_bill = PropertyBill(
@@ -177,7 +177,6 @@ def register_property_bill(
         funding_account=funding_account,
         managed_by=managed_by,
         monarch_merchant_id=monarch_merchant_id,
-        exclude=exclude,
         notes=notes,
     )
     prop.bills.append(new_bill)
@@ -197,7 +196,6 @@ def update_property_bill(
     payment_method: Optional[str] = None,
     funding_account: Optional[str] = None,
     managed_by: Optional[str] = None,
-    exclude: Optional[bool] = None,
     notes: Optional[str] = None,
 ) -> tuple[bool, str | PropertyBill]:
     """Update an existing property bill. Creates a local override if the bill is inherited.
@@ -214,9 +212,9 @@ def update_property_bill(
         for j, bill in enumerate(prop.bills):
             if bill.name.lower() != bill_name.lower():
                 continue
+            if bill.deleted:
+                return False, f"Bill '{bill_name}' is deleted on {property_name}. Use register to re-add."
 
-            if exclude is not None:
-                bill.exclude = exclude
             if vendor is not None:
                 bill.vendor = vendor
             if monarch_merchant_id is not None:
@@ -250,7 +248,6 @@ def update_property_bill(
                 payment_method=payment_method,
                 funding_account=funding_account,
                 managed_by=managed_by,
-                exclude=exclude or False,
                 notes=notes,
             )
             prop.bills.append(override)
@@ -267,9 +264,10 @@ def remove_property_bill(
     property_name: str,
     bill_name: str,
 ) -> tuple[bool, str]:
-    """Remove a locally-declared bill from a property.
+    """Remove a bill from a property.
 
-    Raises InheritedBillError if the bill is inherited — use exclude instead.
+    If the bill is inherited, writes a deleted tombstone to suppress it.
+    If the bill is locally added, removes the entry entirely.
     Returns (success, message).
     """
     config = load_config()
@@ -278,18 +276,30 @@ def remove_property_bill(
         if prop.name.lower() != property_name.lower():
             continue
 
-        # Check if it's inherited
-        if _is_inherited_bill(prop, bill_name):
-            raise InheritedBillError(
-                f"Cannot remove '{bill_name}' from {property_name} — it's inherited "
-                f"from '{prop.inherit}'. Use update_property_bill with exclude=true instead."
-            )
-
+        # Check if locally declared
         for j, bill in enumerate(prop.bills):
             if bill.name.lower() != bill_name.lower():
                 continue
+            if bill.deleted:
+                return False, f"Bill '{bill_name}' is already removed from {property_name}"
 
-            prop.bills.pop(j)
+            if _is_inherited_bill(prop, bill_name):
+                # It's in our local list as an override of an inherited bill — mark deleted
+                bill.deleted = True
+                prop.bills[j] = bill
+            else:
+                # Purely local — just remove
+                prop.bills.pop(j)
+
+            config.properties[i] = prop
+            save_config(config)
+            return True, f"Removed '{bill_name}' from {property_name}"
+
+        # Not in local list — check if inherited
+        if _is_inherited_bill(prop, bill_name):
+            # Add tombstone
+            tombstone = PropertyBill(name=bill_name, deleted=True)
+            prop.bills.append(tombstone)
             config.properties[i] = prop
             save_config(config)
             return True, f"Removed '{bill_name}' from {property_name}"
