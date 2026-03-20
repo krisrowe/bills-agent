@@ -533,6 +533,20 @@ async def remove_property_bill_tool(
 
 
 @mcp.tool(
+    name="remove_property",
+    description="""Remove a property entirely.
+
+Use when a property is no longer relevant (sold, consolidated with another, etc.).
+Works for both user-added and template-based properties.""",
+)
+async def remove_property_tool(
+    name: str = Field(description="Property name to remove"),
+) -> dict:
+    success, message = properties.remove_property(name)
+    return {"success": success, "message": message}
+
+
+@mcp.tool(
     name="update_property",
     description="""Update property metadata (inherit, abstract, funding_account, address, tax_id, notes).
 
