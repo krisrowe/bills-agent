@@ -21,6 +21,7 @@ Tools are organized by purpose:
 - Config tools: Verify setup and show paths
 """
 
+from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -31,7 +32,7 @@ import json as json_mod
 
 from ..sdk.common import accounts, budget, filters, ignored, properties
 from ..sdk.common.config import get_config_path, get_data_dir, load_config
-from ..sdk.common.inventory import build_bill_inventory, load_package_config
+from ..sdk.common.inventory import build_bill_inventory, load_monarch_data, load_package_config
 
 mcp = FastMCP("bills")
 
@@ -767,28 +768,15 @@ def _inventory_cache_path():
     return get_data_dir() / "inventory.json"
 
 
-def _monarch_cache_path(resource: str):
-    """Path to cached Monarch data files (written by plugin hooks)."""
-    return get_data_dir() / f"monarch_{resource}.json"
-
-
-def _load_monarch_cache(resource: str) -> list[dict]:
-    """Load cached Monarch data. Returns empty list if not cached."""
-    path = _monarch_cache_path(resource)
-    if not path.exists():
-        return []
-    return json_mod.loads(path.read_text())
-
 
 @mcp.tool(
     name="build_bill_inventory",
     description="""Build a complete bill inventory and return a manifest with alerts and summaries.
 
 PREREQUISITE: Call list_recurring and list_accounts from monarch-access FIRST.
-Plugin hooks automatically cache the responses to disk in canonical form.
-This tool reads from that cache — no arguments needed.
-
-If cache is missing, pass recurring_streams and accounts directly as fallback.
+Plugin hooks automatically cache the responses to disk and return the file paths.
+Pass those paths as streams_path and accounts_path. If not provided, reads from
+default cache location.
 
 RETURNS (small response — manifest only, not full items):
 - inventory_hash: pass this to get_inventory_section to prevent stale reads
@@ -810,20 +798,24 @@ WORKFLOW:
 8. Help user link, ignore, or fix items as needed""",
 )
 async def build_bill_inventory_tool(
-    recurring_streams: list[dict] = Field(
-        default_factory=list,
-        description="Fallback: pass directly if hooks didn't cache. Usually empty — hooks handle this.",
+    streams_path: Optional[str] = Field(
+        default=None,
+        description="Path to cached recurring streams JSON (from hook output). Reads from default cache if not provided.",
     ),
-    accounts: list[dict] = Field(
-        default_factory=list,
-        description="Fallback: pass directly if hooks didn't cache. Usually empty — hooks handle this.",
+    accounts_path: Optional[str] = Field(
+        default=None,
+        description="Path to cached accounts JSON (from hook output). Reads from default cache if not provided.",
+    ),
+    categories_path: Optional[str] = Field(
+        default=None,
+        description="Path to cached categories JSON (from hook output). Used for category group classification. Optional.",
     ),
 ) -> dict:
-    # Prefer cached data from hooks; fall back to arguments
-    if not recurring_streams:
-        recurring_streams = _load_monarch_cache("recurring")
-    if not accounts:
-        accounts = _load_monarch_cache("accounts")
+    recurring_streams, accounts, _categories = load_monarch_data(
+        streams_path=streams_path,
+        accounts_path=accounts_path,
+        categories_path=categories_path,
+    )
 
     config = load_config()
     defaults = load_package_config()

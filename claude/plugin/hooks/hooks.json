@@ -10,5 +10,11 @@
     "event": "PostToolUse",
     "matcher": "mcp__monarch-access__list_accounts",
     "command": "python3 claude/plugin/hooks/cache_monarch.py accounts"
+  },
+  {
+    "type": "command",
+    "event": "PostToolUse",
+    "matcher": "mcp__monarch-access__list_categories",
+    "command": "python3 claude/plugin/hooks/cache_monarch.py categories"
   }
 ]

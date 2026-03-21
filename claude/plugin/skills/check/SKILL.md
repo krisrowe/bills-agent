@@ -52,12 +52,14 @@ This proves nothing fell through the cracks from either source.
 
 Call these in parallel — no user interaction needed:
 
-**From monarch-access:**
-- `list_recurring` — plugin hooks cache this to disk automatically
-- `list_accounts` — plugin hooks cache this to disk automatically
+**From monarch-access (call all three in parallel):**
+- `list_recurring` — plugin hooks cache to disk, return count + path
+- `list_accounts` — plugin hooks cache to disk, return count + path
+- `list_categories` — plugin hooks cache to disk, return count + path
 
 Then call:
-- `build_bill_inventory()` — NO ARGUMENTS NEEDED (reads cached Monarch data from hooks).
+- `build_bill_inventory(streams_path, accounts_path, categories_path)` — pass the cached file
+  paths from the hook output. Reads from default cache locations if paths not provided.
   Returns a manifest with:
   - `inventory_hash` — needed to fetch sections
   - `alerts` — urgent items (overdue, promo deadlines, credential problems)
