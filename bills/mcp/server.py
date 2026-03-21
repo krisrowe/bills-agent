@@ -767,57 +767,64 @@ def _inventory_cache_path():
     return get_data_dir() / "inventory.json"
 
 
+def _monarch_cache_path(resource: str):
+    """Path to cached Monarch data files (written by plugin hooks)."""
+    return get_data_dir() / f"monarch_{resource}.json"
+
+
+def _load_monarch_cache(resource: str) -> list[dict]:
+    """Load cached Monarch data. Returns empty list if not cached."""
+    path = _monarch_cache_path(resource)
+    if not path.exists():
+        return []
+    return json_mod.loads(path.read_text())
+
+
 @mcp.tool(
     name="build_bill_inventory",
     description="""Build a complete bill inventory and return a manifest with alerts and summaries.
 
-This is the FIRST tool to call after loading Monarch data. It cross-references config
-expectations against Monarch recurring streams using deterministic ID-based matching.
-The full inventory is cached to disk — use get_inventory_section to fetch individual
-sections for review.
+PREREQUISITE: Call list_recurring and list_accounts from monarch-access FIRST.
+Plugin hooks automatically cache the responses to disk in canonical form.
+This tool reads from that cache — no arguments needed.
 
-INPUTS:
-- recurring_streams: full array from monarch-access list_recurring
-- accounts: full array from monarch-access list_accounts
+If cache is missing, pass recurring_streams and accounts directly as fallback.
 
 RETURNS (small response — manifest only, not full items):
 - inventory_hash: pass this to get_inventory_section to prevent stale reads
 - declared_summary: table of per-property declared bill counts (declared, linked, unlinked)
-  - one row per concrete property + one row for credit accounts
 - stream_accounting: how all Monarch streams were accounted for
-  - total: total streams from Monarch
-  - linked_per_property: dict of property name → stream count linked to that property
-  - skipped_transfers: merchant names auto-skipped as transfers
-  - skipped_income: merchant names auto-skipped as income
-  - ignored_by_you: merchant names you previously told us to ignore
-  - unidentified_count: streams that couldn't be categorized
-  - unidentified_preview: first 10 unidentified merchant names with amounts
+  - linked_per_property, skipped_transfers, skipped_income, ignored_by_you,
+    unidentified_count, unidentified_preview — all with merchant names listed
 - alerts: URGENT items needing immediate attention
-  - overdue: bills past due with no payment found
-  - promo_critical: deferred interest deadlines within 90 days
-  - disconnected: account credentials need refresh
 - sections: list of available section names to fetch via get_inventory_section
 
 WORKFLOW:
-1. Call list_recurring and list_accounts from monarch-access (parallel)
-2. Call this tool with those results
-3. Present ALERTS to user first — these need immediate attention
-4. Present DECLARED BILLS SUMMARY TABLE from declared_summary
-5. Call get_inventory_section for each property and credit_accounts section
-6. Present STREAM ACCOUNTING SUMMARY from stream_accounting
-7. Call get_inventory_section("unidentified") for unidentified streams
-8. Call get_inventory_section("ignored") for ignored streams
-9. For items needing reconciliation, use update tools to link/classify, then rebuild""",
+1. Call list_recurring and list_accounts from monarch-access (parallel) — hooks cache the data
+2. Call this tool (no arguments needed)
+3. Present ALERTS
+4. Present DECLARED BILLS SUMMARY TABLE
+5. Fetch property and credit account sections via get_inventory_section
+6. Present STREAM ACCOUNTING SUMMARY
+7. Fetch unidentified and ignored sections
+8. Help user link, ignore, or fix items as needed""",
 )
 async def build_bill_inventory_tool(
     recurring_streams: list[dict] = Field(
-        description="Array from monarch-access list_recurring"
+        default_factory=list,
+        description="Fallback: pass directly if hooks didn't cache. Usually empty — hooks handle this.",
     ),
     accounts: list[dict] = Field(
         default_factory=list,
-        description="Array from monarch-access list_accounts",
+        description="Fallback: pass directly if hooks didn't cache. Usually empty — hooks handle this.",
     ),
 ) -> dict:
+    # Prefer cached data from hooks; fall back to arguments
+    if not recurring_streams:
+        recurring_streams = _load_monarch_cache("recurring")
+    if not accounts:
+        accounts = _load_monarch_cache("accounts")
+
     config = load_config()
     defaults = load_package_config()
     result = build_bill_inventory(

@@ -53,11 +53,12 @@ This proves nothing fell through the cracks from either source.
 Call these in parallel — no user interaction needed:
 
 **From monarch-access:**
-- `list_recurring` — all detected recurring payments
-- `list_accounts` — all accounts with balances and credential status
+- `list_recurring` — plugin hooks cache this to disk automatically
+- `list_accounts` — plugin hooks cache this to disk automatically
 
 Then call:
-- `build_bill_inventory(recurring_streams, accounts)` — returns a manifest with:
+- `build_bill_inventory()` — NO ARGUMENTS NEEDED (reads cached Monarch data from hooks).
+  Returns a manifest with:
   - `inventory_hash` — needed to fetch sections
   - `alerts` — urgent items (overdue, promo deadlines, credential problems)
   - `declared_summary` — per-property declared bill counts (declared, linked, unlinked)
