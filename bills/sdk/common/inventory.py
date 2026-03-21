@@ -15,6 +15,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional
 
+import json
 import yaml
 from pydantic import BaseModel, Field
 
@@ -277,6 +278,42 @@ def _compute_payment_status(stream: dict, today: date) -> PaymentStatus:
         status="unknown",
         due_date=due_date_str,
         last_paid=last_paid_str,
+    )
+
+
+def load_monarch_data(
+    streams_path: Optional[str] = None,
+    accounts_path: Optional[str] = None,
+    categories_path: Optional[str] = None,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Load Monarch data from cached files or default XDG cache location.
+
+    Plugin hooks cache Monarch responses to XDG data dir after list_recurring,
+    list_accounts, and list_categories calls. This function reads from those caches.
+
+    Args:
+        streams_path: Path to recurring streams JSON. Default: ~/.local/share/bills/monarch_recurring.json.
+        accounts_path: Path to accounts JSON. Default: ~/.local/share/bills/monarch_accounts.json.
+        categories_path: Path to categories JSON. Default: ~/.local/share/bills/monarch_categories.json.
+
+    Returns:
+        (recurring_streams, accounts, categories) — all as list[dict].
+        Returns empty lists if cache files don't exist.
+    """
+    from .config import get_data_dir
+
+    data_dir = get_data_dir()
+
+    def _load(path: Optional[str], default_name: str) -> list[dict]:
+        if path:
+            return json.loads(Path(path).read_text())
+        default = data_dir / default_name
+        return json.loads(default.read_text()) if default.exists() else []
+
+    return (
+        _load(streams_path, "monarch_recurring.json"),
+        _load(accounts_path, "monarch_accounts.json"),
+        _load(categories_path, "monarch_categories.json"),
     )
 
 

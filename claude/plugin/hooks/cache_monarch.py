@@ -80,9 +80,24 @@ def canonicalize_accounts(items: list[dict]) -> list[dict]:
     return result
 
 
+def canonicalize_categories(items: list[dict]) -> list[dict]:
+    """Keep only fields needed for category group classification."""
+    return [
+        {
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "group": {
+                "name": (item.get("group") or {}).get("name"),
+                "type": (item.get("group") or {}).get("type"),
+            },
+        }
+        for item in items
+    ]
+
+
 def main():
     resource_type = sys.argv[1] if len(sys.argv) > 1 else None
-    if resource_type not in ("recurring", "accounts"):
+    if resource_type not in ("recurring", "accounts", "categories"):
         sys.exit(0)
 
     hook_input = json.load(sys.stdin)
@@ -94,18 +109,44 @@ def main():
         canonical = canonicalize_recurring(items)
         cache_file = CACHE_DIR / "monarch_recurring.json"
         cache_file.write_text(json.dumps(canonical))
-        summary = f"{len(canonical)} recurring streams cached for bill inventory"
+        output = {
+            "recurring": {
+                "count": len(canonical),
+                "cached": str(cache_file),
+            }
+        }
 
     elif resource_type == "accounts":
         canonical = canonicalize_accounts(items)
         cache_file = CACHE_DIR / "monarch_accounts.json"
         cache_file.write_text(json.dumps(canonical))
-        credit = sum(1 for a in canonical if (a.get("type") or {}).get("name") == "credit")
-        loan = sum(1 for a in canonical if (a.get("type") or {}).get("name") == "loan")
-        disconnected = sum(1 for a in canonical if (a.get("credential") or {}).get("updateRequired"))
-        summary = f"{len(canonical)} accounts cached ({credit} credit, {loan} loan, {disconnected} credential issues)"
+        output = {
+            "accounts": {
+                "count": len(canonical),
+                "credit": sum(1 for a in canonical if (a.get("type") or {}).get("name") == "credit"),
+                "loan": sum(1 for a in canonical if (a.get("type") or {}).get("name") == "loan"),
+                "credential_issues": sum(1 for a in canonical if (a.get("credential") or {}).get("updateRequired")),
+                "cached": str(cache_file),
+            }
+        }
 
-    print(json.dumps({"updatedMCPToolOutput": summary}))
+    elif resource_type == "categories":
+        canonical = canonicalize_categories(items)
+        cache_file = CACHE_DIR / "monarch_categories.json"
+        cache_file.write_text(json.dumps(canonical))
+        groups = {}
+        for c in canonical:
+            g = (c.get("group") or {}).get("type", "unknown")
+            groups[g] = groups.get(g, 0) + 1
+        output = {
+            "categories": {
+                "count": len(canonical),
+                "by_group_type": groups,
+                "cached": str(cache_file),
+            }
+        }
+
+    print(json.dumps({"updatedMCPToolOutput": json.dumps(output)}))
 
 
 if __name__ == "__main__":
