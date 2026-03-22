@@ -29,27 +29,33 @@ def extract_data(hook_input: dict) -> list[dict]:
     """Extract the actual data from the MCP tool response structure."""
     response = hook_input.get("tool_response", {})
 
-    # MCP responses come as content blocks: [{"type": "text", "text": "{...}"}]
+    # Response can be a JSON string, a dict, or a list of content blocks
+    if isinstance(response, str):
+        try:
+            response = json.loads(response)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    if isinstance(response, dict):
+        for key in ("recurring", "accounts", "categories"):
+            if key in response:
+                return response[key]
+        return [response]
+
     if isinstance(response, list):
+        # Content blocks: [{"type": "text", "text": "{...}"}]
         for block in response:
             if isinstance(block, dict) and block.get("type") == "text":
                 try:
                     parsed = json.loads(block["text"])
-                    # Monarch tools wrap in {"recurring": [...]} or {"accounts": [...]}
                     if isinstance(parsed, dict):
-                        for key in ("recurring", "accounts"):
+                        for key in ("recurring", "accounts", "categories"):
                             if key in parsed:
                                 return parsed[key]
-                        return [parsed]
-                    return parsed
+                    return parsed if isinstance(parsed, list) else [parsed]
                 except (json.JSONDecodeError, TypeError):
                     continue
-
-    # Direct dict response
-    if isinstance(response, dict):
-        for key in ("recurring", "accounts"):
-            if key in response:
-                return response[key]
+        return response
 
     return []
 
@@ -97,6 +103,7 @@ def canonicalize_categories(items: list[dict]) -> list[dict]:
 
 def main():
     resource_type = sys.argv[1] if len(sys.argv) > 1 else None
+
     if resource_type not in ("recurring", "accounts", "categories"):
         sys.exit(0)
 
@@ -146,7 +153,12 @@ def main():
             }
         }
 
-    print(json.dumps({"updatedMCPToolOutput": json.dumps(output)}))
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "updatedMCPToolOutput": json.dumps(output),
+        }
+    }))
 
 
 if __name__ == "__main__":
