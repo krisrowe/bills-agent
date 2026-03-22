@@ -1,20 +1,33 @@
-[
-  {
-    "type": "command",
-    "event": "PostToolUse",
-    "matcher": "mcp__.*__list_recurring",
-    "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/cache_monarch.py recurring"
-  },
-  {
-    "type": "command",
-    "event": "PostToolUse",
-    "matcher": "mcp__.*__list_accounts",
-    "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/cache_monarch.py accounts"
-  },
-  {
-    "type": "command",
-    "event": "PostToolUse",
-    "matcher": "mcp__.*__list_categories",
-    "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/cache_monarch.py categories"
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*__list_recurring",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/cache_monarch.py recurring"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*__list_accounts",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/cache_monarch.py accounts"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*__list_categories",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/cache_monarch.py categories"
+          }
+        ]
+      }
+    ]
   }
-]
+}
