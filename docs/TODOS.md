@@ -1,27 +1,22 @@
 # TODO — Bills Agent
 
-Captured from session 2026-03-17. Prioritized by impact.
+Open work items not already captured in GitHub issues.
+For issue-tracked work, see: https://github.com/krisrowe/bills-agent/issues
 
 ---
 
 ## Architecture
 
-### A1: bills-mcp imports monarch-access SDK directly
-**Problem:** Agent is a dumb middleman carrying 40KB of Monarch data between two MCP servers. Causes "Large MCP response" warnings and context bloat.
-**Fix:** `build_bill_inventory` tool takes zero arguments, internally imports monarch SDK and calls `list_recurring`/`list_accounts` directly. Same token file (`~/.config/monarch/token`), no duplicate credentials. Add `monarch-access` as a pip dependency.
-**Impact:** Eliminates context pollution, simplifies agent workflow to one zero-arg tool call.
-
 ### A2: Category group enrichment for reliable skip classification
-**Problem:** Income/transfer detection uses fnmatch glob patterns (Python's `fnmatch` function) on user-customized category names (e.g., `*Net Pay*`, `*Transfer*`). Fragile, user-specific, breaks when categories are renamed.
-**Fix:** When fetching recurring streams, also fetch `list_categories` (one extra API call), build category_id → category group type mapping, enrich each stream with the group type. Use `group.type` for skip classification instead of name patterns.
-**Where:** monarch-access `list_recurring` could do this internally, or bills-agent does the join if using A1.
+**Problem:** Income/transfer detection uses fnmatch glob patterns on user-customized category names (e.g., `*Net Pay*`, `*Transfer*`). Fragile, user-specific, breaks when categories are renamed.
+**Fix:** Use Monarch's `group.type` field (`income`, `transfer`, `expense`) instead of name patterns. PostToolUse hooks already cache categories with `group.type`. The SDK just needs to use it instead of fnmatch.
 **Design principle:** Prefer Monarch's native data model constructs over pattern matching on user-customized names.
 
 **Analysis (confirmed 2026-03-20):** Queried all 158 categories in Monarch. Every category has a `group` with a `type` field that is one of: `income`, `transfer`, `expense`. This is a Monarch system-level classification — users can customize category names and move categories between groups, but the group types themselves are fixed by Monarch.
 
 Verified against a live Monarch account: all income-type categories (12 total) have `group.type == "income"`, and all transfer-type categories (17 total) have `group.type == "transfer"`. No exceptions found.
 
-**Conclusion:** `group.type == "income"` or `group.type == "transfer"` fully replaces all fnmatch skip patterns. The `skip_patterns` section in `defaults.yaml` can be removed entirely once this is implemented. Works for every Monarch user regardless of custom category naming.
+**Conclusion:** `group.type == "income"` or `group.type == "transfer"` fully replaces all fnmatch skip patterns. The `skip_patterns` section in `config.yaml` can be removed entirely once this is implemented. Works for every Monarch user regardless of custom category naming.
 
 **Open questions about category assignment on recurring streams:**
 The recurring query returns category per occurrence, not per merchant. But we don't fully understand HOW Monarch assigns that category:
@@ -33,209 +28,35 @@ The recurring query returns category per occurrence, not per merchant. But we do
 - **Known:** Monarch has auto-categorization rules tied to merchants (`ruleCount` field on merchant query). These likely drive the category assignment but the exact mechanics are undocumented.
 - **Known:** Each recurring occurrence CAN have a different category from another occurrence of the same stream.
 
-**Risk for A2:** If Monarch assigns an incorrect category to a recurring occurrence (e.g., a transfer stream gets categorized as an expense by a user rule), the group.type check would fail to skip it. This is low risk but worth monitoring. The current fnmatch approach has the same vulnerability — a miscategorized stream would also bypass name-based patterns.
-
-### A3: Minimize list_accounts response size
-**Problem:** `list_accounts` returns ~600 bytes/account with fields bills-agent doesn't need (`includeInNetWorth`, `dataProvider`, `isManual`, `createdAt`, `updatedAt`, `syncDisabled`, `deactivatedAt`, `isHidden`, `isAsset`).
-**Fix:** Add `fieldset` parameter to monarch-access `list_accounts` — `standard` (id, displayName, mask, type, subtype, currentBalance, credential.updateRequired, institution.name) vs `full` (everything). Default to `standard`.
-**Where:** monarch-access repo.
+**Risk:** If Monarch assigns an incorrect category to a recurring occurrence (e.g., a transfer stream gets categorized as an expense by a user rule), the group.type check would fail to skip it. Low risk — current fnmatch approach has the same vulnerability.
 
 ---
 
 ## Presentation / Skill
 
-### P1: Section summary table in initial output
-**Problem:** User has no overview of what sections exist and what state they're in before diving into details. Creates anxiety about what's coming.
-**Fix:** After `build_bill_inventory` manifest, show a summary table with per-section declared/detected/matched counts plus alert flags. Requires adding per-section breakdowns to the manifest response.
-
-### P2: Ignored section needs transparency
-**Problem:** "3 ignored" with no context creates suspicion. User doesn't know why, what, or who decided.
-**Fix:** Ignored summary should show merchant names, amounts, and the specific reason (auto-skipped by category group vs manually ignored by user). For small counts (<10), show inline rather than requiring a section fetch.
-
-### P3: Unclassified section needs a preview
-**Problem:** "32 unclassified" gives no sense of what's in there.
-**Fix:** Include top 5-10 merchant names in the manifest summary so user knows the flavor before fetching the full section.
-
-### P4: First-run inflation of "personal" section
-**Problem:** On first run with no merchant IDs linked, property bill streams (mortgages, utilities) fall through to bill_filter matching and appear as "personal" items. Primary residence mortgage shows as both a declared-only property bill AND a detected-only personal bill. Count is inflated and misleading.
-**Fix:** Consider — should bill_filter matches that clearly belong to a property (by account association or category) be flagged differently? Or accept that first-run is noisy and it cleans up after linking?
+### P4: First-run inflation of unidentified section
+**Problem:** On first run with no merchant IDs linked, property bill streams (mortgages, utilities) fall through to unidentified. Primary residence mortgage shows as both a declared-only property bill AND a detected-only unidentified stream. Count is inflated and misleading.
+**Fix:** Consider — should streams that clearly belong to a property (by account association or category) be flagged differently? Or accept that first-run is noisy and it cleans up after linking? Property-level `funding_account` (D4) could help with tentative association.
 
 ---
 
 ## Data Model / Config
 
-### D1: Design principle in CONTRIBUTING.md — DONE
-Added in commit 92eb5a6.
-
-### D2: Retire temp/design-complete-accountability.md
-Out of date. The code + SKILL.md + CONTRIBUTING.md are the living docs now.
-
-### D3: Unified config model with inheritance and per-property overrides
-
-**Problem:** Multiple design issues with the current config model:
-- `has_mortgage` is a special-case flag for something that should be a regular bill
-- Framework slot name matching is brittle ("Electric/Gas" != "Electric + Gas")
-- Personal type has no template, gets false mortgage injection
-- PropertyBill stores amounts/due dates that go stale (Monarch has them live)
-- Property types live in a separate `property_types` dict, different structure from properties
-- No way to share config across properties of the same type without repeating
-
-**Design (confirmed 2026-03-20):**
-
-Templates are abstract properties. Concrete properties inherit from them. Everything is
-in one `properties` array. No separate `property_types` section.
-
-Package defaults (`bills/sdk/common/defaults.yaml`):
-```yaml
-properties:
-  - name: real_estate
-    abstract: true
-    bills:
-      - name: Mortgage
-      - name: Property Tax
-
-  - name: residence
-    abstract: true
-    inherit: real_estate
-    bills:
-      - name: Electric/Gas
-      - name: Water/Trash
-      - name: Internet
-      - name: Home Insurance
-
-  - name: rental_vacation
-    abstract: true
-    inherit: real_estate
-    bills:
-      - name: Electric
-      - name: Water
-      - name: Trash
-      - name: Internet
-      - name: Insurance
-      - name: Management
-
-  - name: rental_longterm
-    abstract: true
-    inherit: real_estate
-    bills:
-      - name: Insurance
-
-  - name: land
-    abstract: true
-    bills:
-      - name: Property Tax
-
-  - name: personal
-    abstract: true
-    bills:
-      - name: Housing
-      - name: Phone
-      - name: Auto Insurance
-```
-
-User config (`~/.config/bills/config.yaml`):
-```yaml
-properties:
-  - name: Lake House
-    inherit: rental_vacation
-    funding_account: "1234"
-    bills:
-      - name: Management
-        exclude: true
-      - name: Mortgage
-        vendor: Mortgage Co
-
-  - name: Back 40
-    inherit: land
-    bills:
-      - name: Mortgage
-        exclude: true
-      - name: Property Tax
-        vendor: County Tax Office
-
-  - name: Personal
-    inherit: personal
-    bills:
-      - name: Housing
-        exclude: true
-      - name: Recurring Payment
-        vendor: Vendor
-```
-
-Users can stack custom abstracts for shared config:
-```yaml
-  - name: my_str
-    abstract: true
-    inherit: rental_vacation
-    bills:
-      - name: Management
-        exclude: true
-
-  - name: Lake House
-    inherit: my_str
-    funding_account: "1234"
-
-  - name: Mountain Cabin
-    inherit: my_str
-    funding_account: "5678"
-```
-
-**Merge semantics:**
-- Arrays everywhere (properties and bills) — supports natural names with spaces/punctuation
-- Merge by `name` field at both levels (~20 lines of custom merge code)
-- Package defaults provide abstract templates, user config provides concrete properties
-- User config can also patch abstract templates (declare same name, fields merge)
-- Per-property bills: match by name to inherited slots, patch only declared fields
-- `exclude: true` removes an inherited bill for this property
-- Unmatched bill entries are additions (HOA, HELOC, etc.)
-- Fields NOT stored in config: amount, due_date, last_paid, payment_status (all from Monarch)
-- `abstract` defaults to false — user properties are concrete unless explicitly abstract
-
-**What this eliminates:**
-- `has_mortgage` flag — mortgage is a regular bill, exclude if not applicable
-- `property_types` dict — templates are just abstract properties
-- Stale amounts/due dates in config
-- Special-case code for personal type
-- Separate defaults.yaml format vs config.yaml format
-
-**What this replaces on Property model:**
-- `type` field → `inherit` field
-- `has_mortgage` field → removed (mortgage is a bill entry)
-- `property_types` on BillsConfig → removed
-- `PropertyTypeTemplate` / `ExpectedBillSlot` models → removed
-
-### D4: Property-level funding_account
-**Problem:** Stream-to-property assignment requires knowing which bank account belongs to
-which property. Currently inferred from bill-level `funding_account` fields.
-**Fix:** Add `funding_account` to Property. Inventory function uses it to auto-assign
-unclaimed Monarch streams to properties by matching `account_id`. Bill-level
-`funding_account` overrides for bills paid from a different account.
+### D4: Property-level funding_account for stream-to-property assignment
+**Problem:** Stream-to-property assignment requires knowing which bank account belongs to which property. Currently inferred from bill-level `funding_account` fields.
+**Fix:** The `funding_account` field already exists on the Property model. Inventory function should use it to auto-assign unclaimed Monarch streams to properties by matching `account_id`. Bill-level `funding_account` overrides for bills paid from a different account.
 
 ### D5: Slot-based matching instead of name-based
-**Problem:** Framework slot matching by display name breaks on "Electric/Gas" vs "Electric + Gas".
-**Fix:** Add optional `slot` field to bill entries. When present, match by slot. When absent,
-fall back to name matching. Long-term: all template bills have slots, user bills reference them.
+**Problem:** Inherited bill matching by display name breaks on "Electric/Gas" vs "Electric + Gas".
+**Fix:** Add optional `slot` field to bill entries. When present, match by slot. When absent, fall back to name matching. Long-term: all template bills have slots, user bills reference them.
 
-### D6: P1/P2/P3 implemented
-P1 (section summary table), P2 (ignored transparency), P3 (unclassified preview) were
-implemented in commit ba7201e.
-
----
-
-## monarch-access Changes (separate repo)
-
-### M1: Category group enrichment on list_recurring
-See A2 above. Add category_group to each stream in `list_recurring` output.
-
-### M2: Fieldset parameter on list_accounts
-See A3 above. Add `fieldset=standard|full` parameter.
-
-### M3: Minimize list_recurring output
-Same idea as M2 — `list_recurring` includes `category_id`, `is_approximate`, and other fields bills-agent doesn't use. Consider a `fieldset` parameter here too.
+### D7: Config management tools
+**Problem:** No way to inspect or manage config outside of direct YAML editing.
+**Fix:** Add SDK functions + MCP tools: export current resolved config, import from file, reset to defaults, show package-level templates and their bills.
 
 ---
 
 ## Exploration / Research
 
 ### R1: MCP elicitation support in Claude Code (introduced 2026-03-16)
-Claude Code added MCP elicitation support. Investigate whether we can use it to prompt the user mid-workflow — e.g., "which section do you want to tackle next?" or "should I ignore all these subscriptions?" without the agent having to guess or dump everything at once. Could improve the section-by-section review flow by letting the tool itself ask the user questions rather than relying on the agent to mediate.
+Claude Code added MCP elicitation support. Investigate whether we can use it to prompt the user mid-workflow — e.g., "which section do you want to tackle next?" or "should I ignore all these subscriptions?" Could improve the section-by-section review flow by letting the tool itself ask the user questions rather than relying on the agent to mediate.
