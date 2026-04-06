@@ -209,13 +209,13 @@ Walks through a credit card's transaction history in segments (between payments/
 
 For skill changes (SKILL.md) — just restart Claude Code with the local plugin:
 ```bash
-claude --plugin-dir ~/ws/bills-agent/claude/plugin
+claude --plugin-dir path/to/bills-agent/claude/plugin
 ```
 
 For SDK/MCP code changes (inventory.py, server.py, etc.) — also reinstall the package:
 ```bash
 pipx install --force .
-claude --plugin-dir ~/ws/bills-agent/claude/plugin
+claude --plugin-dir path/to/bills-agent/claude/plugin
 ```
 
 This loads the plugin directly from your working tree. No commit, no push, no marketplace update. Iterate until it works, then release.

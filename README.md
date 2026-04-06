@@ -46,7 +46,7 @@ claude plugin install bills@productivity --scope user
 Or for development, load directly:
 
 ```bash
-claude --plugin-dir ~/ws/bills-agent/claude/plugin
+claude --plugin-dir path/to/bills-agent/claude/plugin
 ```
 
 ### Verify
