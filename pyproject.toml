@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bills-agent"
-version = "0.1.0"
+version = "1.1.0"
 description = "Bill management framework for AI agent platforms"
 readme = "README.md"
 license = "MIT"

@@ -184,24 +184,71 @@ claude/plugin/
 ├── .claude-plugin/
 │   └── plugin.json          # name: "bills", version
 ├── .mcp.json                # mcpServers.manager → bills-mcp
-├── skills/
+├── hooks/
+│   ├── hooks.json           # PostToolUse hook definitions
+│   └── cache_monarch.py     # intercepts Monarch responses, caches to disk
+├── skills/                    # Agent Skills standard (agentskills.io)
 │   ├── check/
-│   │   └── SKILL.md         # 3-phase: load → reconcile → report
+│   │   └── SKILL.md         # 4-phase: load → reconcile → report → triage
 │   └── explain/
 │       └── SKILL.md         # CC balance segment walkthrough
 ```
 
+### Hooks
+
+The plugin registers PostToolUse hooks that fire after `list_recurring`,
+`list_accounts`, and `list_categories` calls to any MCP server (matched via
+regex `mcp__.*__list_recurring`, etc.).
+
+Each hook runs `cache_monarch.py <resource_type>`, which:
+
+1. Reads the MCP tool response from stdin (hook input JSON)
+2. Extracts only the fields `build_bill_inventory` needs (defined in `RECURRING_FIELDS`, `ACCOUNT_FIELDS`)
+3. Writes canonical JSON to `~/.local/share/bills/monarch_<type>.json`
+4. Replaces the full MCP response with a short summary (count + cache path) via `updatedMCPToolOutput`
+
+This keeps Monarch responses (often 50-100KB) out of the conversation context.
+The inventory engine reads from these cache files automatically.
+
+**Without hooks:** The full Monarch responses remain in context. The inventory
+engine still works — it accepts data directly or reads from the default cache
+paths. Hooks are a Claude Code optimization, not a requirement.
+
 ### Skill: check
 
 Four phases:
-1. **Load** — call `list_recurring` + `list_accounts` from monarch-access, load config from bills-mcp (parallel, read-only)
+1. **Load** — call `list_recurring` + `list_accounts` + `list_categories` from monarch-access (hooks cache to disk), then `build_bill_inventory` with cache paths
 2. **Reconcile** — link config entries to Monarch entities by ID, classify unmatched streams, persist decisions to config (interactive, skipped if already linked)
-3. **Report** — call `build_bill_inventory` with Monarch data, present alerts + sections + accountability (deterministic, no fuzzy matching)
+3. **Report** — present alerts + sections + accountability from inventory (deterministic, no fuzzy matching)
 4. **Triage & Fix** — walk user through fixing problems surfaced by the report: overdue items, stale streams, merchant splits, wrong categories, disconnected accounts (uses monarch-access tools)
 
 ### Skill: explain
 
 Walks through a credit card's transaction history in segments (between payments/statement dates), showing large charges individually and small charges summarized, with running balance reconciliation.
+
+## CLI
+
+The `bills` CLI (`bills/cli.py`) provides launch helpers, MCP server registration,
+and standalone reports. It is a thin wrapper — no business logic.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `bills claude` | Launch Claude Code with the bills plugin attached (`--plugin-dir`) |
+| `bills gemini` | Launch Gemini CLI with the bills extension |
+| `bills register claude [--scope user\|project]` | Register `bills-mcp` in Claude Code settings |
+| `bills register gemini` | Link bills extension with Gemini CLI |
+| `bills unregister claude [--scope user\|project]` | Remove `bills-mcp` from Claude Code settings |
+| `bills-report summary [--format text\|json]` | Config summary (account/property/promo counts) |
+| `bills-report overdue` | Overdue detection (stub — needs Monarch integration) |
+| `bills-report due-soon` | Due-soon detection (stub — needs date calculation) |
+
+### Entry points (pyproject.toml)
+
+- `bills` → `bills.cli:main`
+- `bills-mcp` → `bills.mcp.server:run_server`
+- `bills-report` → `bills.cli:report`
 
 ## Development Loop
 

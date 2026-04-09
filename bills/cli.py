@@ -18,7 +18,7 @@ from .sdk.common.config import get_config_path, get_data_dir, load_config
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="1.1.0")
 def main():
     """Bill management for AI agents."""
     pass
