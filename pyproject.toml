@@ -37,7 +37,7 @@ include = ["bills*"]
 
 [tool.setuptools.package-data]
 "bills.sdk.common" = ["config.yaml"]
-"bills.plugin" = ["**/*"]
+"bills.plugin" = ["**/*", ".*", ".claude-plugin/*", ".mcp.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
