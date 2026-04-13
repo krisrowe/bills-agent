@@ -65,10 +65,19 @@ category names include "Credit Card Payment", "Payment", "Transfer".
 
 Pull at least the **last 2 payments** to show both current and prior cycle.
 
+**For high-volume cards** where charges push payments out of the result window,
+use `search="payment"` to find credit card payments directly.
+
+**Autopay preemption:** For `auto_pay_full` accounts, check for ANY payment
+(positive credit) on the card between the previous due date and the current
+due date. If a large manual payment earlier in the cycle already satisfied
+the balance, autopay legitimately won't fire. Only flag as missing if NO
+payment of any kind was found in that cycle window.
+
 ## Phase 3b: Fallback — Search Funding Side for Disconnected Accounts
 
 When Phase 3 returns no transactions for an account due to:
-- Credential `updateRequired` (⚡ disconnected)
+- Credential `updateRequired` (🔌 disconnected)
 - No Monarch account match (❌ no link)
 
 Search from the **funding side** instead:
@@ -106,74 +115,80 @@ funding accounts).
 Build a table with one row per declared credit account:
 
 ```
-| # |    | Account                   | Balance    | Due  | Status  | Paid  | +/-         | Next | Prev 1 | $      | Prev 2 | $      | Paid From          |
-|---|----|---------------------------|------------|------|---------|-------|-------------|------|--------|--------|--------|--------|--------------------|
-| 1 |    | Acme Visa (1234)          | $450.00    | 9th  | Paid    | 4/7   | ✅ 2d early  | 26d  | 3/9    | $660   | 2/9    | $380   | autopay (5678)     |
-| 2 |    | Big Bank MC (2345)        | $2,800.00  | 11th | Paid    | 4/11  | ✅ day of    | 28d  | 3/15   | $1,200 | 2/26   | $800   | autopay (6789)     |
-| 3 |    | National Card (3456)      | $1,500.00  | 27th | Paid    | 3/29  | ⚠️ 2d late   | 14d  | 2/27   | $500   | 1/27   | $475   | autopay min (7890) |
-| 4 |    | Store Card (4567)         | $3,000.00  | 10th | LATE    | —     | ❌ 3d        | 27d  | 3/15   | $110   | 2/14   | $110   | autopay (8901)     |
-| 5 | ⚡ | Credit Union LOC (5678)   | $5,000.00  | 9th  | Paid    | 4/9   | ✅ day of    | 26d  | 3/9    | $125   | 2/9    | $105   | auto_draft (9012)  |
-| 6 |    | Dept Store (6789)         | $0.00      | ?    | $0 bal  | —     | —           | —    | —      | —      | —      | —      | manual             |
-| 7 | ❌ | Vendor Card (7890)        | ?          | ?    | No link | —     | —           | —    | —      | —      | —      | —      | manual             |
+| # |    | Account              | Balance    | Due  | Status    | Next | Last Due   | Paid | $      | Prior Due  | Paid | $      | Paid From      |
+|---|----|----------------------|------------|------|-----------|------|------------|------|--------|------------|------|--------|----------------|
+| 1 |    | Acme Visa (1234)     | $2,500.00  | 15th | ✅ Paid   | 22d  | ✅ 3/15    | 3/15 | $1,200 | ✅ 2/15    | 2/14 | $980   | autopay (9876) |
+| 2 |    | BigBox Store (5678)  | $4,200.00  | 10th | ⏰ DUE    | 1d   | ✅ 3/10    | 3/10 | $150   | ❌ 2/10    | —    | $0*    | manual (4321)  |
+| 3 |    | Travel Card (9012)   | $800.00    | 1st  | ✅ Paid   | 18d  | ✅ 4/1     | 3/20 | $3,500 | ✅ 3/1     | 2/25 | $2,800 | autopay (4321) |
+| 4 |    | Rewards Plus (3456)  | $337.00    | 26th | ✅ Paid   | 13d  | ✅ 3/26    | 3/26 | $25    | ✅ 2/26    | 2/26 | $25    | manual (9876)  |
+| 5 |    | Promo Card (7890)    | $6,444.00  | ?    | ?         | —    | —          | 3/31 | $110   | —          | 3/17 | $110   | manual (4321)  |
+| 6 | 🔌 | Old HELOC (2468)     | $5,000.00  | 9th  | ✅ Paid   | 26d  | ✅ 4/9     | 4/9  | $105   | ✅ 3/9     | 3/9  | $124   | auto_draft (5555) |
+| 7 |    | Dept Store (1357)    | $0.00      | ?    | $0 bal    | —    | —          | —    | —      | —          | —    | —      | manual         |
+| 8 | ❌ | Spouse Card (2468)   | ?          | ?    | No link   | —    | —          | 4/8  | $107   | —          | 3/25 | $107   | manual         |
 ```
 
-The second column is a **status icon** (blank when healthy):
-- ⚡ = Monarch credential needs refresh (`updateRequired`) — balance/transactions may be stale
+The second column is a **connectivity icon** (blank when healthy):
+- 🔌 = Monarch credential disconnected (`updateRequired`) — balance/transactions may be stale
 - ❌ = No Monarch account linked — can't query directly
 
 Column definitions:
 - **#** — row number
-- **(icon)** — blank when healthy, ⚡ or ❌ when there's a connectivity issue
-- **Account** — name and last4 from config (e.g., "Chase Amazon (0955)"). No ellipsis or dots.
+- **(icon)** — blank when healthy, 🔌 or ❌ when there's a connectivity issue
+- **Account** — name and last4 from config (e.g., "Acme Visa (1234)"). No ellipsis or dots.
 - **Balance** — current balance from Monarch `list_accounts`
-- **Due** — day of month from config `due_day` (e.g., "9th"). Show `?` if not configured.
-- **Status** — current cycle payment status:
-  - `Paid` — payment found for current billing cycle
-  - `LATE` — due day has passed, no payment found
+- **Due** — day of month from config `due_day` (e.g., "15th"). Show `?` if not configured.
+- **Status** — current cycle payment status. Only these values:
+  - `✅ Paid` — current cycle is satisfied
+  - `⏰ DUE` — due within 7 days or today, no payment yet
+  - `❌ LATE` — due date has passed, no payment found
   - `$0 bal` — zero balance, no payment needed
+  - `?` — no due day configured, can't determine
   - `No link` — no Monarch account linked, can't verify
-  - `?` — no due day configured, can't determine status
-- **Paid** — date of current cycle's payment (e.g., "4/7"). `—` if not paid or unknown.
-- **+/-** — timeliness relative to due date, with icon:
-  - `✅ 2d early` — paid before due date
-  - `✅ day of` — paid on due date
-  - `⚠️ 2d late` — paid after due date
-  - `❌ 3d` — days overdue (for LATE status)
-  - `—` when status is unknown, $0, or no link
-- **Next** — days until next cycle's due date (e.g., "26d"). `—` if no due day.
-- **Prev 1** — date of previous cycle's payment
-- **$** — amount of previous cycle's payment (whole dollars)
-- **Prev 2** — date of the cycle before that
-- **$** — amount of the cycle before that
-- **Paid From** — funding account mask or payment method from config (e.g., "autopay (2653)", "manual")
+- **Next** — days until next cycle's due date (e.g., "22d"). `—` if no due day.
+- **Last Due** — most recent due date strictly before today. Prefixed with status icon:
+  - ✅ payment found on or before due date
+  - ⚠️ payment found but after due date (paid late)
+  - ❌ no payment found or payment reversed
+- **Paid** — date the payment posted for that cycle. `—` if none found.
+- **$** — payment amount (whole dollars)
+- **Prior Due** — the due date before Last Due, same icon treatment
+- **Paid** — date the payment posted for the prior cycle
+- **$** — payment amount (whole dollars)
+- **Paid From** — funding account mask or payment method from config
 
-### Status Indicators
+### After the Table — Two Separate Lists
 
-After the table, flag any concerns:
+Present concerns in two clearly separated lists:
 
-**LATE** — due day has passed this month and no payment found since
-the previous due date. Show: account name, due day, days overdue, last known
-payment date.
+**1. Payment actions needed** — things requiring user action NOW:
 
-**Promo deadline approaching** — account has a promo plan expiring within 90
-days. Calculate:
-- Months remaining = days until expiration / 30
-- Required monthly payment = promo balance / months remaining
-- Compare to recent payment amounts — flag if insufficient
-- Show the math so the user can verify
+- **❌ LATE payments** — due date has passed, no payment found. Show: account
+  name, due day, days overdue, last known payment date.
+- **⏰ Payments due soon** — due within 7 days with no payment yet. Show:
+  account name, due date, days remaining, expected amount.
+- **Promo deadline approaching** — account has a promo plan expiring within 90
+  days. Calculate:
+  - Months remaining = days until expiration / 30
+  - Required monthly payment = promo balance / months remaining
+  - Compare to recent payment amounts — flag if insufficient
+  - Show the math so the user can verify
+- **Reversed/failed payments** — payment posted then reversed, returned check
+  fees, etc.
 
-**Disconnected account** — Monarch credentials need refresh (`updateRequired`
-is true on the credential). Show: institution name, which accounts are affected,
-note that balance and transactions may be stale.
+**2. Config & hygiene items** — maintenance tasks, not urgent:
 
-**No Monarch match** — declared account has no matching Monarch account. Can't
-verify anything. Ask if the account is still active or if the last4 has changed.
-
-**Missing due day** — account doesn't have `due_day` configured. Note this and
-suggest checking a recent statement email or the card issuer's website.
-
-**Zero balance** — account has $0 balance. No payment needed — skip from
-concerns. Still show in the table for completeness.
+- **🔌 Disconnected credentials** — Monarch credentials need refresh. Show:
+  institution name, which accounts are affected.
+- **Missing due_day** — accounts with a balance but no `due_day` configured.
+  Suggest checking a recent statement email or issuer website.
+- **No Monarch match** — declared account not found in Monarch. Ask if still
+  active or if last4 has changed.
+- **Stale promo balances** — promo `updated` date >30 days old. Offer to
+  refresh from current Monarch balance.
+- **Zero balance accounts** — may be closed or inactive. Ask if they should
+  be removed from config.
+- **Missing funding accounts** — payment found but can't identify which
+  checking account it came from.
 
 ## Phase 6: Fix and Update
 
