@@ -53,7 +53,7 @@ requires_claude = pytest.mark.skipif(_reason is not None, reason=_reason or "")
 @pytest.fixture
 def plugin_dir():
     """Path to the bills plugin directory."""
-    return str(files("bills") / ".." / "claude" / "plugin")
+    return str(files("bills") / "plugin")
 
 
 @pytest.fixture

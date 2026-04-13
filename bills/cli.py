@@ -224,7 +224,7 @@ def _launch_claude(project_dir: str, user_prompt: str | None = None,
     """Launch Claude Code with plugin and pre-approved tools."""
     os.chdir(project_dir)
 
-    plugin_path = files("bills") / ".." / "claude" / "plugin"
+    plugin_path = files("bills") / "plugin"
 
     # Monarch server name varies by registration. Default "*" uses glob
     # matching. Tests set BILLS_MONARCH_MCP to the exact name (e.g., "monarch")

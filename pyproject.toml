@@ -37,6 +37,7 @@ include = ["bills*"]
 
 [tool.setuptools.package-data]
 "bills.sdk.common" = ["config.yaml"]
+"bills.plugin" = ["**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

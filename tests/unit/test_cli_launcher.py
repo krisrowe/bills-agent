@@ -292,7 +292,7 @@ class TestLaunchClaude:
         assert "--plugin-dir" in invocation["args"]
         idx = invocation["args"].index("--plugin-dir")
         plugin_dir = invocation["args"][idx + 1]
-        assert "claude" in plugin_dir and "plugin" in plugin_dir
+        assert "plugin" in plugin_dir
 
     def test_passes_allowed_tools(self, fake_agent, isolated_env):
         result, invocation = _run_bills_with_fake(
