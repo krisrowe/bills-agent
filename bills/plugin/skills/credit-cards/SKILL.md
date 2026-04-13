@@ -106,8 +106,15 @@ funding accounts).
 Build a table with one row per declared credit account:
 
 ```
-| # |   | Account | Balance | Due | Last Payment | Date | Prior Payment | Date | Paid From |
-|---|---|---------|---------|-----|-------------|------|---------------|------|-----------|
+| # |    | Account                   | Balance    | Due  | Status  | Paid  | +/-         | Next | Prev 1 | $      | Prev 2 | $      | Paid From          |
+|---|----|---------------------------|------------|------|---------|-------|-------------|------|--------|--------|--------|--------|--------------------|
+| 1 |    | Acme Visa (1234)          | $450.00    | 9th  | Paid    | 4/7   | ✅ 2d early  | 26d  | 3/9    | $660   | 2/9    | $380   | autopay (5678)     |
+| 2 |    | Big Bank MC (2345)        | $2,800.00  | 11th | Paid    | 4/11  | ✅ day of    | 28d  | 3/15   | $1,200 | 2/26   | $800   | autopay (6789)     |
+| 3 |    | National Card (3456)      | $1,500.00  | 27th | Paid    | 3/29  | ⚠️ 2d late   | 14d  | 2/27   | $500   | 1/27   | $475   | autopay min (7890) |
+| 4 |    | Store Card (4567)         | $3,000.00  | 10th | LATE    | —     | ❌ 3d        | 27d  | 3/15   | $110   | 2/14   | $110   | autopay (8901)     |
+| 5 | ⚡ | Credit Union LOC (5678)   | $5,000.00  | 9th  | Paid    | 4/9   | ✅ day of    | 26d  | 3/9    | $125   | 2/9    | $105   | auto_draft (9012)  |
+| 6 |    | Dept Store (6789)         | $0.00      | ?    | $0 bal  | —     | —           | —    | —      | —      | —      | —      | manual             |
+| 7 | ❌ | Vendor Card (7890)        | ?          | ?    | No link | —     | —           | —    | —      | —      | —      | —      | manual             |
 ```
 
 The second column is a **status icon** (blank when healthy):
@@ -115,20 +122,36 @@ The second column is a **status icon** (blank when healthy):
 - ❌ = No Monarch account linked — can't query directly
 
 Column definitions:
-- **Account** — name and last4 from config (e.g., "Sapphire Rewards (...1234)")
+- **#** — row number
+- **(icon)** — blank when healthy, ⚡ or ❌ when there's a connectivity issue
+- **Account** — name and last4 from config (e.g., "Chase Amazon (0955)"). No ellipsis or dots.
 - **Balance** — current balance from Monarch `list_accounts`
-- **Due** — day of month from config `due_day` (e.g., "9th")
-- **Last Payment** — most recent payment amount
-- **Date** — date of most recent payment
-- **Prior Payment** — second most recent payment amount
-- **Date** — date of second most recent payment
-- **Paid From** — funding account mask or name if cross-reference succeeded, or payment method from config (e.g., "autopay", "epay")
+- **Due** — day of month from config `due_day` (e.g., "9th"). Show `?` if not configured.
+- **Status** — current cycle payment status:
+  - `Paid` — payment found for current billing cycle
+  - `LATE` — due day has passed, no payment found
+  - `$0 bal` — zero balance, no payment needed
+  - `No link` — no Monarch account linked, can't verify
+  - `?` — no due day configured, can't determine status
+- **Paid** — date of current cycle's payment (e.g., "4/7"). `—` if not paid or unknown.
+- **+/-** — timeliness relative to due date, with icon:
+  - `✅ 2d early` — paid before due date
+  - `✅ day of` — paid on due date
+  - `⚠️ 2d late` — paid after due date
+  - `❌ 3d` — days overdue (for LATE status)
+  - `—` when status is unknown, $0, or no link
+- **Next** — days until next cycle's due date (e.g., "26d"). `—` if no due day.
+- **Prev 1** — date of previous cycle's payment
+- **$** — amount of previous cycle's payment (whole dollars)
+- **Prev 2** — date of the cycle before that
+- **$** — amount of the cycle before that
+- **Paid From** — funding account mask or payment method from config (e.g., "autopay (2653)", "manual")
 
 ### Status Indicators
 
 After the table, flag any concerns:
 
-**Missed payment** — due day has passed this month and no payment found since
+**LATE** — due day has passed this month and no payment found since
 the previous due date. Show: account name, due day, days overdue, last known
 payment date.
 
