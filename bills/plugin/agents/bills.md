@@ -23,6 +23,11 @@ You have access to two MCP servers:
 **monarch-access** (external, must be separately registered) — queries Monarch Money:
 - `list_recurring`, `list_accounts`, `list_categories`, `list_transactions`
 
+If Monarch tools are not available in this session (no MCP server with "monarch"
+in the name, or tools like `list_accounts` / `list_recurring` are not loaded),
+tell the user to exit and run `bills --refresh-mcp` to re-discover and cache
+the Monarch server name, then start a new session.
+
 ## Choosing the Right Skill
 
 When the user asks about bills or payments, pick the right skill:

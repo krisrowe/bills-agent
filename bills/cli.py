@@ -219,6 +219,75 @@ def _resolve_project_dir(
 # =============================================================================
 
 
+def _mcp_cache_path() -> Path:
+    """Path to cached MCP discovery results."""
+    cache_home = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    return Path(cache_home) / "bills" / "mcp.json"
+
+
+def _load_mcp_cache() -> dict:
+    """Load cached MCP discovery."""
+    path = _mcp_cache_path()
+    if path.exists():
+        with open(path) as f:
+            return json.load(f)
+    return {}
+
+
+def _save_mcp_cache(data: dict) -> None:
+    """Save MCP discovery to cache."""
+    path = _mcp_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _run_mcp_discovery() -> dict:
+    """Run claude mcp list and parse results.
+
+    Returns dict with 'monarch_server' (tool prefix or None) and
+    'monarch_status' (display string).
+    """
+    try:
+        result = subprocess.run(
+            [_agent_command("claude"), "mcp", "list"],
+            capture_output=True, text=True, timeout=15,
+        )
+        for line in result.stdout.splitlines():
+            name = line.split(":")[0].strip()
+            if "monarch" in name.lower():
+                connected = "Connected" in line
+                prefix = name.replace(" ", "_").replace(".", "_")
+                return {
+                    "monarch_server": prefix,
+                    "monarch_display": name,
+                    "monarch_connected": connected,
+                }
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return {"monarch_server": None, "monarch_display": None, "monarch_connected": False}
+
+
+def _get_monarch_server(force_refresh: bool = False) -> str | None:
+    """Get the Monarch MCP server tool prefix, from cache or discovery.
+
+    Override with BILLS_MONARCH_MCP env var for testing.
+    """
+    override = os.environ.get("BILLS_MONARCH_MCP")
+    if override:
+        return override
+
+    if not force_refresh:
+        cache = _load_mcp_cache()
+        if "monarch_server" in cache:
+            return cache.get("monarch_server")
+
+    # First run or forced refresh
+    discovery = _run_mcp_discovery()
+    _save_mcp_cache(discovery)
+    return discovery.get("monarch_server")
+
+
 def _launch_claude(project_dir: str, user_prompt: str | None = None,
                    print_mode: bool = False):
     """Launch Claude Code with plugin and pre-approved tools."""
@@ -226,10 +295,7 @@ def _launch_claude(project_dir: str, user_prompt: str | None = None,
 
     plugin_path = files("bills") / "plugin"
 
-    # Monarch server name varies by registration. Default "*" uses glob
-    # matching. Tests set BILLS_MONARCH_MCP to the exact name (e.g., "monarch")
-    # since --bare doesn't support globs in --allowedTools.
-    monarch = os.environ.get("BILLS_MONARCH_MCP", "*")
+    monarch = _get_monarch_server()
 
     allowed_tools = [
         # bills-mcp read-only tools (plugin server name: plugin:bills:manager)
@@ -239,12 +305,15 @@ def _launch_claude(project_dir: str, user_prompt: str | None = None,
         "mcp__plugin_bills_manager__validate_*",
         "mcp__plugin_bills_manager__build_bill_inventory",
         "mcp__plugin_bills_manager__get_inventory_section",
-        # monarch-access read-only tools
-        f"mcp__{monarch}__list_recurring",
-        f"mcp__{monarch}__list_accounts",
-        f"mcp__{monarch}__list_categories",
-        f"mcp__{monarch}__list_transactions",
     ]
+    if monarch:
+        # Monarch read-only tools — server name discovered at launch time
+        allowed_tools.extend([
+            f"mcp__{monarch}__list_recurring",
+            f"mcp__{monarch}__list_accounts",
+            f"mcp__{monarch}__list_categories",
+            f"mcp__{monarch}__list_transactions",
+        ])
 
     cmd = [
         _agent_command("claude"),
@@ -289,10 +358,12 @@ def _launch_gemini(project_dir: str, user_prompt: str | None = None):
 @click.option("--non-interactive", is_flag=True, help="Fail instead of prompting for input")
 @click.option("-p", "print_prompt", default=None, help="Run non-interactively with this prompt (print and exit)")
 @click.option("-i", "--initial", default=None, help="Start session with a prompt or skill alias (e.g., cc, check, explain)")
+@click.option("--refresh-mcp", is_flag=True, help="Re-discover MCP servers and update cache before launching")
 @click.pass_context
 def main(ctx, here: bool, roam: bool, directory: str | None,
          agent_override: str | None, non_interactive: bool,
-         print_prompt: str | None, initial: str | None):
+         print_prompt: str | None, initial: str | None,
+         refresh_mcp: bool):
     """Bill management for AI agents.
 
     Run without a subcommand to launch your agent with the bills plugin.
@@ -306,6 +377,19 @@ def main(ctx, here: bool, roam: bool, directory: str | None,
 
     agent = _resolve_agent(agent_override, non_interactive)
     project_dir = _resolve_project_dir(directory, here, roam, non_interactive)
+
+    if refresh_mcp:
+        click.echo("Discovering MCP servers...")
+        discovery = _run_mcp_discovery()
+        _save_mcp_cache(discovery)
+        if discovery.get("monarch_server"):
+            status = "connected" if discovery["monarch_connected"] else "not connected"
+            click.echo(f"  Monarch: {discovery['monarch_display']} ({status})")
+        else:
+            click.echo("  Monarch: not found")
+            click.echo("  Monarch tools will not be pre-approved.")
+            click.echo("  Register monarch-access, then run 'bills --refresh-mcp' again.")
+        click.echo()
 
     if print_prompt is not None:
         user_prompt = print_prompt
