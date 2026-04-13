@@ -101,10 +101,55 @@ bills -C /path          # use this directory once (doesn't save)
 bills --agent claude    # switch to Claude Code (saves for future runs)
 bills --agent gemini    # switch to Gemini CLI (saves for future runs)
 bills --non-interactive # fail instead of prompting (for scripts)
+bills -p "check my bills" # run non-interactively with this prompt
 ```
 
 If the saved directory is moved or deleted, `bills` exits with an error
 and a hint to run `--here` from the new location.
+
+## Usage
+
+Once launched, you interact with the agent through natural language and slash
+commands. Here's what you can ask and when to use each skill.
+
+### Skills
+
+| Skill | What it does | When to use |
+|-------|-------------|-------------|
+| `/bills:check` | Full bill review via the inventory engine — cross-references your declared bills against Monarch's recurring streams | Your config and stream links are reasonably complete and you want a fast, comprehensive check across all bill types |
+| `/bills:credit-cards` | Deep credit card verification by searching actual transaction history per card | Stream matching is unreliable for credit cards (see below), you're still building out config, or you want to validate `/bills:check` results |
+| `/bills:explain` | Walks through a credit card's statement cycles, charges, payments, and interest | You want to understand how a specific card's balance got to where it is |
+
+### Example prompts
+
+```
+"Check my bills"                    → /bills:check
+"Are my credit cards paid?"         → /bills:credit-cards
+"How did my Sapphire get to $2400?" → /bills:explain
+"What's overdue?"                   → /bills:check
+"Show me payments on all my cards"  → /bills:credit-cards
+```
+
+### Quick questions without starting a session
+
+Use `bills -p` to ask a one-off question from the shell. The agent runs
+the prompt, prints the answer, and exits — no interactive session needed:
+
+```bash
+bills -p "are all my credit cards paid this month?"
+bills -p "what's overdue?"
+bills -p "do any promo deadlines expire in the next 90 days?"
+```
+
+This is useful for spot checks, scripting, or when you just want a fast
+answer without the overhead of an interactive session.
+
+### When `/bills:check` isn't enough for credit cards
+
+`/bills:check` relies on Monarch's recurring stream detection, which works well
+for fixed-amount bills but often struggles with credit cards. Common problems
+and how `/bills:credit-cards` works around them are documented in
+[docs/credit-cards.md](docs/credit-cards.md).
 
 ## Two Ways to Use the Plugin (Claude Code)
 
@@ -178,7 +223,7 @@ when you want a focused bill-checking session.
 - **Skills** — workflow instructions in the [Agent Skills](https://agentskills.io) open standard:
   - `/bills:check` — full bill review: cross-reference, reconcile, report, triage
   - `/bills:explain` — credit card balance walkthrough
-  - `/bills:check-credit-cards` — quick credit card payment verification
+  - `/bills:credit-cards` — deep credit card payment verification
 - **CLI** (`bills`) — launcher, MCP server registration, and standalone reports.
 - **Claude Code plugin** — bundles all of the above plus PostToolUse hooks that cache Monarch API responses to keep the context window clean.
 
@@ -371,7 +416,7 @@ bills -C ~/finances           # use this dir once (doesn't save)
 bills --agent claude          # switch to Claude Code (saves preference)
 bills --agent gemini          # switch to Gemini CLI (saves preference)
 bills --non-interactive       # fail instead of prompting (for scripts)
-bills --prompt <name>         # use a different system prompt (Claude only)
+bills -p "check my bills"     # run non-interactively with this prompt
 ```
 
 Preferences are saved to `~/.config/bills/launcher.json`.
@@ -425,10 +470,45 @@ Then restart Claude Code. `claude plugin update` only detects changes if the
 ```bash
 git clone https://github.com/krisrowe/bills-agent.git
 cd bills-agent
-make setup    # prepare venv for testing
-make test     # run unit tests (pytest, configured via pytest.ini)
-make test-all # run all tests including integration
+make setup       # prepare venv for testing
+make test        # run unit tests (pytest, configured via pytest.ini)
+make test-all    # run all tests including integration
+make test-claude # run Claude Code integration tests (see below)
 ```
+
+### Claude Code integration tests
+
+`tests/claude/` contains tests that launch Claude Code with the bills plugin
+and a fake Monarch MCP server to verify end-to-end behavior: plugin loading,
+tool registration, and `--allowedTools` patterns.
+
+Raw:
+```bash
+export ANTHROPIC_API_KEY=<your key>
+pytest tests/claude/ -v
+```
+
+Repeatable (macOS keychain):
+```bash
+# one-time: save key to keychain
+security add-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w <your key>
+```
+
+```bash
+# each run
+export ANTHROPIC_API_KEY=$(security find-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w)
+make test-claude
+```
+
+Requirements:
+- Claude Code installed locally (`claude` on PATH)
+- `ANTHROPIC_API_KEY` exported (tests use `--bare` which disables OAuth)
+
+Each test makes a real API call. No real financial data is accessed — a fake
+MCP server returns canned data. Tests are excluded from default `pytest` runs.
+
+**Limitations:** Tests run under `--bare`, which disables PostToolUse hooks.
+Plugin hook behavior (Monarch response caching) is not verified by these tests.
 
 Or manually:
 

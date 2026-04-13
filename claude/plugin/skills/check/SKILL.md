@@ -1,6 +1,13 @@
 ---
 name: check
-description: Review bill payment status by cross-referencing your declared expectations (config) against Monarch's recurring list and transactions. Use when asked about bills, payments due, or to check on financial obligations.
+description: >
+  Full bill review: cross-references declared expectations against Monarch's
+  recurring streams and account data via the inventory engine. The streamlined
+  approach — works best when your bills configuration and Monarch stream links
+  are reasonably complete. Covers all bill types (properties, credit cards,
+  promos). For credit cards specifically, if configuration is still a work in
+  progress or you want to validate against actual transactions, use
+  /bills:credit-cards instead.
 ---
 
 # Check Bills Skill

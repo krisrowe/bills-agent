@@ -39,7 +39,7 @@ BILLS-AGENT REPO (this repo — defines HOW to check bills)
     .mcp.json                 ← points to bills-mcp command
     skills/check/SKILL.md     ← cross-reference workflow
     skills/explain/SKILL.md   ← CC balance walkthrough
-    skills/check-credit-cards/SKILL.md ← quick CC payment verification
+    skills/credit-cards/SKILL.md ← deep CC payment verification via transactions
 
 USER CONFIG (~/.config/bills/ — user's declared expectations)
   config.yaml                 ← credit accounts, properties, bills,
@@ -196,6 +196,9 @@ claude/plugin/
 ├── .claude-plugin/
 │   └── plugin.json          # name: "bills", version
 ├── .mcp.json                # mcpServers.manager → bills-mcp
+├── settings.json            # {"agent": "bills"} — default agent for plugin sessions
+├── agents/
+│   └── bills.md             # agent definition: ambient context + skill references
 ├── hooks/
 │   ├── hooks.json           # PostToolUse hook definitions
 │   └── cache_monarch.py     # intercepts Monarch responses, caches to disk
@@ -205,6 +208,17 @@ claude/plugin/
 │   └── explain/
 │       └── SKILL.md         # CC balance segment walkthrough
 ```
+
+### Agent Definition
+
+The plugin declares a default agent via `settings.json` → `{"agent": "bills"}`,
+which points to `agents/bills.md`. This file provides ambient context to every
+session — tool descriptions, priority guidance, output preferences — without
+replacing Claude Code's default system prompt.
+
+This works for both launch paths: `bills` launcher and installed plugin. Previous
+versions used `--system-prompt` in the launcher, which **replaced** Claude Code's
+entire default system prompt. The agent definition layers on top instead.
 
 ### Hooks
 
@@ -313,6 +327,27 @@ pipx install --force .
 bills
 ```
 
+### Debugging launcher behavior
+
+When investigating behavior observed in a Claude Code session (e.g., a tool not
+being pre-approved, wrong plugin path, missing flags), use `-p` to run a prompt
+non-interactively from a temp directory:
+
+```bash
+# Run a specific prompt without going interactive
+bills -p "list my credit card accounts" -C /tmp/test-bills
+
+# Test from a fresh project dir
+mkdir /tmp/test-bills && bills -p "/bills:credit-cards" -C /tmp/test-bills
+```
+
+The `-p` flag passes through to `claude -p`, which runs the prompt, prints the
+response, and exits. This lets you test the full launcher pipeline — plugin
+loading, tool pre-approval, agent context — without opening an interactive
+session. Especially useful for verifying that `--allowedTools` patterns match
+what Claude Code actually resolves at runtime (server names vary by how
+monarch-access is registered).
+
 ### Releasing Changes
 
 When ready to ship (skills, MCP tools, config models):
@@ -352,6 +387,34 @@ at runtime with `FileNotFoundError`.
   its args and exits. No real agent is ever invoked. See "Agent command
   substitution" in the CLI section above.
 
+### Claude Code integration tests
+
+`tests/claude/` tests launch the real Claude Code binary with `--bare` and `-p`
+to verify end-to-end plugin behavior. They follow the same sociable testing
+philosophy as unit tests — no mocks — except the external dependency is Claude
+Code itself rather than file I/O.
+
+**How they work:** Each test calls `claude --bare --plugin-dir <plugin> --mcp-config <fake> -p "prompt"`.
+`--bare` ensures a clean session — no user hooks, CLAUDE.md, auto-memory, or
+other plugins. The only MCP servers are `bills-mcp` (via plugin) and
+`fake_monarch.py` (via `--mcp-config`). The fake server is a ~30-line FastMCP
+stdio script that returns canned account data.
+
+**What they test:**
+- Plugin loads and MCP tools register correctly
+- `--allowedTools` patterns actually pre-approve the intended tools
+- Agent can call tools and return meaningful output from a prompt
+
+**What they don't test:**
+- PostToolUse hooks — `--bare` disables all hooks. Hook behavior (Monarch
+  response caching, context compression) needs manual verification.
+- Non-deterministic output — assertions check for signals (tool was called,
+  data appeared), not exact strings.
+
+**Requirements:** `claude` on PATH, `ANTHROPIC_API_KEY` set. Each test makes
+a real API call. Excluded from default `pytest` runs via `testpaths` in
+`pytest.ini`.
+
 ## Data Privacy
 
 This repo is PUBLIC. All personal data lives in `~/.config/bills/` at runtime, never in the repo. Use generic examples only in code, tests, and documentation.
@@ -362,13 +425,116 @@ This repo is PUBLIC. All personal data lives in `~/.config/bills/` at runtime, n
 
 When Monarch data is wrong (stale recurring streams, phantom entries), the correct response is to fix Monarch — not to add exclusions or workarounds in the config. The bill filter is intentionally inclusive: if something matches, it's treated as a real bill.
 
-### README vs CONTRIBUTING
+### Documentation Standards
 
-README is for anyone using the tool — installation, configuration concepts, tool
-interfaces, and how the system works from a user perspective. CONTRIBUTING is for
-anyone modifying the code — architecture, design decisions, tradeoffs, and
-implementation details. If a user needs to know it to use the tool, it goes in README.
-If a developer needs to know it to change the code, it goes in CONTRIBUTING.
+#### Three audiences, one source of truth
+
+- **Users** (human) reading docs to install, configure, and use the tool
+- **User-facing agents** reading skills and agent definitions to operate the tool on the user's behalf
+- **Contributor agents** (and human contributors) reading README + CONTRIBUTING to understand the product before modifying it
+
+README is the single source of truth for what the product does, how it works from
+a user perspective, and what commitments we've made about behavior. It serves all
+three audiences — users read it to learn the tool, user-facing agents reference
+it indirectly through skills that align with it, and contributor agents load it
+directly into context (via `CLAUDE.md` / `.gemini/settings.json`). Most README
+content is relevant to contributors because it's the only place that declares
+user-facing intentions — what should this do, what did we promise, what's the
+vision.
+
+CONTRIBUTING supplements README with internal knowledge: how the code is
+organized, why decisions were made, how to test and release. It should not
+duplicate what the product does functionally — that's README's job. A
+contributor agent gets both files in context, so repeating README content in
+CONTRIBUTING just wastes tokens and creates drift risk. When CONTRIBUTING
+needs to reference a user-facing concept, point to README rather than
+restating it.
+
+#### Where things live
+
+| File | Audience | Purpose | Level of detail |
+|------|----------|---------|-----------------|
+| `README.md` | Users, contributors, contributor agents | Product truth: what it does functionally, how to use it, user commitments, skill overview, config concepts, CLI and tool reference | Concise but authoritative. The canonical answer to "how is this supposed to be used?" Links to `docs/` for depth on specific topics. |
+| `docs/*.md` | Users, contributors | Detailed topic guides — scenarios, troubleshooting, data model quirks | Thorough. Real examples of what goes wrong and how to fix it. Organized by topic, not by code structure. |
+| `claude/plugin/agents/bills.md` | User-facing agents | Ambient session context — tool inventory, skill selection, common data problems and workarounds | Operational. Written as guidance the agent applies in real-time. Scenarios describe what the agent will encounter and what to do about it. |
+| `claude/plugin/skills/*/SKILL.md` | User-facing agents | Step-by-step workflow for a specific task — phases, tool calls, presentation rules | Prescriptive. The agent follows these as a recipe. Frontmatter description explains when to invoke vs. alternatives. |
+| `CONTRIBUTING.md` | Contributors, contributor agents | Architecture, design decisions, code organization, testing, release process, these standards | Internal. How the code works and why. Supplements README — does not duplicate it. |
+
+#### Ordering within README
+
+1. **Why** — the problem this solves (motivation before mechanics)
+2. **Prerequisites** — what you need before installing
+3. **Quick Start** — install, launch, first use (get to value fast)
+4. **Usage** — skills overview, example prompts, when to use which, links to detailed docs
+5. **Installation options** — alternative install paths (plugin, marketplace, manual)
+6. **What It Includes** — components list (MCP server, skills, CLI, hooks)
+7. **Other Platforms** — Gemini, Cursor, manual setup
+8. **Configuration** — config concepts, templates, filters (how it works, not raw YAML)
+9. **MCP Tools** — tool reference grouped by domain
+10. **CLI Reference** — command-line usage
+11. **Updating** — how to get new versions
+12. **Development** — contributing, testing, editable install
+
+#### Ordering within CONTRIBUTING
+
+1. **What It Does** — one-paragraph product summary for orientation
+2. **Design Goals** — principles that govern decisions
+3. **Architecture** — where things live, data flow, two-layer config
+4. **Plugin Structure** — agent definition, skills, hooks, settings
+5. **CLI** — launcher, subcommands, preferences
+6. **Development Loop** — local testing, debugging, releasing
+7. **Testing** — test philosophy and patterns
+8. **Data Privacy** — what's safe to commit
+9. **Design Principles** — detailed rationale for specific decisions
+10. **Future Enhancements** — known gaps
+
+#### Overlap between agent/skill content and human docs
+
+Once installed as a plugin, the repo's README is not loaded into the agent's
+context. The agent only sees the agent definition and skill files. Conversely,
+a human user may never see the agent `.md` files — they read the README and
+docs. These two audiences are completely separated at runtime, so both need to
+independently cover workflow guidance: which skill to use in which scenario,
+what data problems to expect, how to work around issues.
+
+The key distinction is voice, not content:
+- **Agent files** (`agents/bills.md`, skill frontmatter): operational.
+  "When you see X, do Y. If `/bills:check` shows Z, suggest `/bills:credit-cards`."
+- **Human docs** (`README.md`, `docs/*.md`): explanatory.
+  "Here's what can go wrong, here's why, here's how to fix it or work around it."
+
+Both may describe the same scenarios. That's fine — they serve readers who will
+never see the other surface.
+
+When adding a new scenario or data problem:
+1. Add it to the relevant `docs/*.md` file with full explanation
+2. Add the operational version to `agents/bills.md` (what to do about it)
+3. If it affects skill selection, update the skill frontmatter descriptions
+4. If it's a common first-encounter issue, mention it briefly in README's
+   Usage section with a link to the detailed doc
+
+#### Skill frontmatter descriptions
+
+Skill `description` fields serve double duty: they help the agent decide which
+skill to invoke, and they appear in slash-command listings. Write them as:
+
+- **What** the skill does (one sentence)
+- **When** to use it vs. alternatives (the rest)
+
+Focus the "when" on observable conditions — things the agent or user can see
+that indicate this skill is the right choice. Not abstract ("when config is
+incomplete") but concrete ("when recurring streams aren't matched to accounts,
+last paid dates are lagging, or autopay merchant names are too generic to link").
+
+#### `docs/` organization
+
+One file per topic. Name files after the topic, not the skill or component:
+- `docs/credit-cards.md` — not `docs/credit-cards-skill.md`
+- `docs/promo-financing.md` — not `docs/promo-tool-usage.md`
+
+Each doc should be self-contained enough that a human can read it without
+having read the README first, but should not duplicate installation or
+quick-start material.
 
 ### Config Is Managed Through Tools, Not Direct Editing
 

@@ -284,14 +284,6 @@ class TestProjectDir:
 
 
 class TestLaunchClaude:
-    def test_passes_system_prompt(self, fake_agent, isolated_env):
-        result, invocation = _run_bills_with_fake(
-            fake_agent, isolated_env,
-            extra_args=["--here"],
-        )
-        assert result.returncode == 0
-        assert "--system-prompt" in invocation["args"]
-
     def test_passes_plugin_dir(self, fake_agent, isolated_env):
         result, invocation = _run_bills_with_fake(
             fake_agent, isolated_env,
@@ -311,20 +303,25 @@ class TestLaunchClaude:
         allowed_count = invocation["args"].count("--allowedTools")
         assert allowed_count > 0
 
-    def test_custom_prompt(self, fake_agent, isolated_env):
+    def test_p_flag_passes_prompt_to_agent(self, fake_agent, isolated_env):
+        """bills -p 'some prompt' passes -p and the prompt to claude."""
         result, invocation = _run_bills_with_fake(
             fake_agent, isolated_env,
-            extra_args=["--here", "--prompt", "check-bills"],
+            extra_args=["--here", "-p", "list my credit cards"],
         )
         assert result.returncode == 0
+        assert "-p" in invocation["args"]
+        idx = invocation["args"].index("-p")
+        assert invocation["args"][idx + 1] == "list my credit cards"
 
-    def test_bad_prompt_fails(self, fake_agent, isolated_env):
-        result, _ = _run_bills_with_fake(
+    def test_no_p_flag_launches_interactive(self, fake_agent, isolated_env):
+        """Without -p, no -p flag is passed to the agent."""
+        result, invocation = _run_bills_with_fake(
             fake_agent, isolated_env,
-            extra_args=["--here", "--prompt", "nonexistent-prompt"],
+            extra_args=["--here"],
         )
-        assert result.returncode != 0
-        assert "not found" in result.stderr.lower()
+        assert result.returncode == 0
+        assert "-p" not in invocation["args"]
 
 
 # =============================================================================

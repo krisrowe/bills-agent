@@ -1,6 +1,13 @@
 ---
-name: check-credit-cards
-description: Check credit card payment status by searching recent transactions on each declared account. Use when asked about credit card payments, whether cards are paid, or to verify payment status across credit accounts.
+name: credit-cards
+description: >
+  Deep credit card payment verification by searching actual transaction history
+  on each declared account. Bypasses Monarch's recurring stream matching — which
+  breaks when autopay merchant names are generic, last paid dates are lagging,
+  streams are linked to the wrong account, or credentials are disconnected. Use
+  to validate /bills:check findings, to work around stream-matching issues, or
+  when the user wants thorough per-card investigation with funding-side
+  cross-referencing.
 ---
 
 # Check Credit Cards Skill

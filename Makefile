@@ -1,4 +1,4 @@
-.PHONY: setup test test-all clean
+.PHONY: setup test test-all test-claude clean
 
 setup:
 	python3 -m venv .venv
@@ -10,6 +10,14 @@ test:
 
 test-all:
 	.venv/bin/pytest tests/
+
+test-claude:
+	@echo "Running Claude Code integration tests."
+	@echo "Requires: claude on PATH, ANTHROPIC_API_KEY set."
+	@echo "Each test makes a real API call to Anthropic."
+	@echo "Uses a stub Monarch MCP server — no real financial data accessed."
+	@echo ""
+	.venv/bin/pytest tests/claude/ -v
 
 clean:
 	rm -rf .venv

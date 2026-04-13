@@ -204,18 +204,16 @@ def _resolve_project_dir(
 # =============================================================================
 
 
-def _launch_claude(project_dir: str, prompt: str):
-    """Launch Claude Code with plugin, pre-approved tools, and system prompt."""
+def _launch_claude(project_dir: str, user_prompt: str | None = None):
+    """Launch Claude Code with plugin and pre-approved tools."""
     os.chdir(project_dir)
 
     plugin_path = files("bills") / ".." / "claude" / "plugin"
-    prompt_path = files("bills") / ".." / "claude" / "prompts" / f"{prompt}.md"
 
-    if not Path(str(prompt_path)).exists():
-        click.echo(f"Prompt not found: {prompt_path}", err=True)
-        sys.exit(1)
-
-    prompt_text = Path(str(prompt_path)).read_text()
+    # Monarch server name varies by registration. Default "*" uses glob
+    # matching. Tests set BILLS_MONARCH_MCP to the exact name (e.g., "monarch")
+    # since --bare doesn't support globs in --allowedTools.
+    monarch = os.environ.get("BILLS_MONARCH_MCP", "*")
 
     allowed_tools = [
         # bills-mcp read-only tools (plugin server name: plugin:bills:manager)
@@ -225,31 +223,34 @@ def _launch_claude(project_dir: str, prompt: str):
         "mcp__plugin_bills_manager__validate_*",
         "mcp__plugin_bills_manager__build_bill_inventory",
         "mcp__plugin_bills_manager__get_inventory_section",
-        # monarch-access read-only tools (server name varies by registration)
-        "mcp__*__list_recurring",
-        "mcp__*__list_accounts",
-        "mcp__*__list_categories",
-        "mcp__*__list_transactions",
+        # monarch-access read-only tools
+        f"mcp__{monarch}__list_recurring",
+        f"mcp__{monarch}__list_accounts",
+        f"mcp__{monarch}__list_categories",
+        f"mcp__{monarch}__list_transactions",
     ]
 
     cmd = [
         _agent_command("claude"),
-        "--system-prompt", prompt_text,
         "--plugin-dir", str(plugin_path),
     ]
     for tool in allowed_tools:
         cmd.extend(["--allowedTools", tool])
 
+    if user_prompt is not None:
+        cmd.extend(["-p", user_prompt])
+
     subprocess.run(cmd)
 
 
-def _launch_gemini(project_dir: str):
+def _launch_gemini(project_dir: str, user_prompt: str | None = None):
     """Launch Gemini CLI with bills extension."""
     os.chdir(project_dir)
 
     extension_path = files("bills") / ".." / "gemini"
 
     cmd = [_agent_command("gemini"), "--extension", str(extension_path)]
+
     subprocess.run(cmd)
 
 
@@ -265,11 +266,12 @@ def _launch_gemini(project_dir: str):
 @click.option("-C", "directory", default=None, help="Use this directory once (doesn't save)")
 @click.option("--agent", "agent_override", default=None, type=click.Choice(["claude", "gemini"]),
               help="Use this agent (saves for future runs)")
-@click.option("--prompt", default="check-bills", help="System prompt to use (Claude only)")
 @click.option("--non-interactive", is_flag=True, help="Fail instead of prompting for input")
+@click.option("-p", "user_prompt", default=None, help="Run non-interactively with this prompt (passed to agent as -p)")
 @click.pass_context
 def main(ctx, here: bool, roam: bool, directory: str | None,
-         agent_override: str | None, prompt: str, non_interactive: bool):
+         agent_override: str | None, non_interactive: bool,
+         user_prompt: str | None):
     """Bill management for AI agents.
 
     Run without a subcommand to launch your agent with the bills plugin.
@@ -281,9 +283,9 @@ def main(ctx, here: bool, roam: bool, directory: str | None,
     project_dir = _resolve_project_dir(directory, here, roam, non_interactive)
 
     if agent == "claude":
-        _launch_claude(project_dir, prompt)
+        _launch_claude(project_dir, user_prompt)
     elif agent == "gemini":
-        _launch_gemini(project_dir)
+        _launch_gemini(project_dir, user_prompt)
 
 
 # =============================================================================
