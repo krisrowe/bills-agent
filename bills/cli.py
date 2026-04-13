@@ -1,12 +1,14 @@
 """CLI for bills-agent.
 
 Thin layer providing:
-- Launch Claude/Gemini with plugin attached
+- Launch agent with plugin attached (auto-detects claude/gemini)
 - Register plugin with Claude/Gemini permanently
 - Standalone reports (passthrough to SDK)
 """
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from importlib.resources import files
@@ -14,29 +16,199 @@ from pathlib import Path
 
 import click
 
-from .sdk.common.config import get_config_path, get_data_dir, load_config
-
-
-@click.group()
-@click.version_option(version="1.1.0")
-def main():
-    """Bill management for AI agents."""
-    pass
+from .sdk.common.config import get_config_dir, get_config_path, load_config
 
 
 # =============================================================================
-# Launch Commands
+# Saved Preferences
 # =============================================================================
 
 
-@main.command("claude")
-@click.option("--prompt", default="check-bills", help="System prompt to use")
-def launch_claude(prompt: str):
-    """Launch Claude Code with bills plugin attached."""
-    # Get plugin path from package
+def _prefs_path() -> Path:
+    """Path to saved launcher preferences."""
+    return get_config_dir() / "launcher.json"
+
+
+def _load_prefs() -> dict:
+    """Load launcher preferences."""
+    path = _prefs_path()
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def _save_prefs(prefs: dict) -> None:
+    """Save launcher preferences."""
+    path = _prefs_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(prefs, f, indent=2)
+
+
+def _update_pref(key: str, value: str) -> None:
+    """Update a single preference."""
+    prefs = _load_prefs()
+    prefs[key] = value
+    _save_prefs(prefs)
+
+
+_ROAM_SENTINEL = "."
+
+
+# =============================================================================
+# Agent Detection
+# =============================================================================
+
+
+def _agent_command(agent: str) -> str:
+    """Resolve the command for an agent.
+
+    Checks BILLS_AGENT_<NAME> env var first (e.g., BILLS_AGENT_CLAUDE).
+    Falls back to the agent name itself (claude, gemini).
+    """
+    return os.environ.get(f"BILLS_AGENT_{agent.upper()}", agent)
+
+
+def _detect_agents() -> list[str]:
+    """Return list of available agent CLIs."""
+    agents = []
+    if shutil.which(_agent_command("claude")):
+        agents.append("claude")
+    if shutil.which(_agent_command("gemini")):
+        agents.append("gemini")
+    return agents
+
+
+def _resolve_agent(agent_override: str | None, non_interactive: bool) -> str:
+    """Resolve which agent to use: override > saved > detect > prompt."""
+    if agent_override:
+        if not shutil.which(_agent_command(agent_override)):
+            click.echo(f"Error: Agent '{agent_override}' not found on PATH.", err=True)
+            sys.exit(1)
+        _update_pref("agent", agent_override)
+        return agent_override
+
+    prefs = _load_prefs()
+    saved = prefs.get("agent")
+    if saved:
+        if not shutil.which(_agent_command(saved)):
+            click.echo(
+                f"Error: Saved agent '{saved}' not found on PATH.\n"
+                f"  Install it or run 'bills --agent claude' or 'bills --agent gemini'.",
+                err=True,
+            )
+            sys.exit(1)
+        return saved
+
+    # No saved preference — detect what's available
+    available = _detect_agents()
+
+    if len(available) == 0:
+        click.echo("Error: Neither 'claude' nor 'gemini' found on PATH.", err=True)
+        sys.exit(1)
+
+    if len(available) == 1:
+        agent = available[0]
+        _update_pref("agent", agent)
+        return agent
+
+    # Both available — prompt
+    if non_interactive:
+        click.echo(
+            "Error: Multiple agents available (claude, gemini). No saved preference.\n"
+            "  Run 'bills --agent claude' or 'bills --agent gemini' first.",
+            err=True,
+        )
+        sys.exit(1)
+
+    click.echo("Multiple agents found:\n")
+    choice = click.prompt(
+        "  [1] Claude Code\n"
+        "  [2] Gemini CLI\n\n"
+        "Choice",
+        type=click.Choice(["1", "2"]),
+    )
+    agent = "claude" if choice == "1" else "gemini"
+    _update_pref("agent", agent)
+    return agent
+
+
+# =============================================================================
+# Project Directory
+# =============================================================================
+
+
+def _resolve_project_dir(
+    directory: str | None, here: bool, roam: bool, non_interactive: bool
+) -> str:
+    """Resolve project directory: explicit > flags > saved > prompt."""
+    if directory:
+        project_dir = str(Path(directory).resolve())
+        if not Path(project_dir).is_dir():
+            click.echo(f"Error: Directory not found: {directory}", err=True)
+            sys.exit(1)
+        return project_dir
+
+    if roam:
+        _update_pref("project_dir", _ROAM_SENTINEL)
+        return os.getcwd()
+
+    if here:
+        cwd = os.getcwd()
+        _update_pref("project_dir", cwd)
+        return cwd
+
+    prefs = _load_prefs()
+    saved = prefs.get("project_dir")
+
+    if saved == _ROAM_SENTINEL:
+        return os.getcwd()
+
+    if saved:
+        if not Path(saved).is_dir():
+            click.echo(
+                f"Error: Saved project directory not found: {saved}\n"
+                f"  Run 'bills --here' from your project directory to reset.",
+                err=True,
+            )
+            sys.exit(1)
+        return saved
+
+    # First run — prompt
+    if non_interactive:
+        click.echo(
+            "Error: No project directory configured.\n"
+            "  Run 'bills --here' or 'bills --roam' first.",
+            err=True,
+        )
+        sys.exit(1)
+
+    cwd = os.getcwd()
+    click.echo(f"No project directory configured. Current directory: {cwd}\n")
+    choice = click.prompt(
+        "  [1] Save this directory (future runs return here)\n"
+        "  [2] Roam (always use whatever directory you're in)\n\n"
+        "Choice",
+        type=click.Choice(["1", "2"]),
+    )
+    if choice == "1":
+        _update_pref("project_dir", cwd)
+    else:
+        _update_pref("project_dir", _ROAM_SENTINEL)
+    return cwd
+
+
+# =============================================================================
+# Agent Launchers
+# =============================================================================
+
+
+def _launch_claude(project_dir: str, prompt: str):
+    """Launch Claude Code with plugin, pre-approved tools, and system prompt."""
+    os.chdir(project_dir)
+
     plugin_path = files("bills") / ".." / "claude" / "plugin"
-
-    # Get prompt path
     prompt_path = files("bills") / ".." / "claude" / "prompts" / f"{prompt}.md"
 
     if not Path(str(prompt_path)).exists():
@@ -45,23 +217,73 @@ def launch_claude(prompt: str):
 
     prompt_text = Path(str(prompt_path)).read_text()
 
+    allowed_tools = [
+        # bills-mcp read-only tools (plugin server name: plugin:bills:manager)
+        "mcp__plugin_bills_manager__list_*",
+        "mcp__plugin_bills_manager__get_*",
+        "mcp__plugin_bills_manager__show_*",
+        "mcp__plugin_bills_manager__validate_*",
+        "mcp__plugin_bills_manager__build_bill_inventory",
+        "mcp__plugin_bills_manager__get_inventory_section",
+        # monarch-access read-only tools (server name varies by registration)
+        "mcp__*__list_recurring",
+        "mcp__*__list_accounts",
+        "mcp__*__list_categories",
+        "mcp__*__list_transactions",
+    ]
+
     cmd = [
-        "claude",
+        _agent_command("claude"),
         "--system-prompt", prompt_text,
         "--plugin-dir", str(plugin_path),
     ]
+    for tool in allowed_tools:
+        cmd.extend(["--allowedTools", tool])
 
     subprocess.run(cmd)
 
 
-@main.command("gemini")
-def launch_gemini():
-    """Launch Gemini CLI with bills extension attached."""
-    # Get extension path
+def _launch_gemini(project_dir: str):
+    """Launch Gemini CLI with bills extension."""
+    os.chdir(project_dir)
+
     extension_path = files("bills") / ".." / "gemini"
 
     cmd = ["gemini", "--extension", str(extension_path)]
     subprocess.run(cmd)
+
+
+# =============================================================================
+# Main CLI
+# =============================================================================
+
+
+@click.group(invoke_without_command=True)
+@click.version_option(version="1.1.0")
+@click.option("--here", is_flag=True, help="Use current directory as project dir (saves for future runs)")
+@click.option("--roam", is_flag=True, help="Always use current directory (saves preference for future runs)")
+@click.option("-C", "directory", default=None, help="Use this directory once (doesn't save)")
+@click.option("--agent", "agent_override", default=None, type=click.Choice(["claude", "gemini"]),
+              help="Use this agent (saves for future runs)")
+@click.option("--prompt", default="check-bills", help="System prompt to use (Claude only)")
+@click.option("--non-interactive", is_flag=True, help="Fail instead of prompting for input")
+@click.pass_context
+def main(ctx, here: bool, roam: bool, directory: str | None,
+         agent_override: str | None, prompt: str, non_interactive: bool):
+    """Bill management for AI agents.
+
+    Run without a subcommand to launch your agent with the bills plugin.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    agent = _resolve_agent(agent_override, non_interactive)
+    project_dir = _resolve_project_dir(directory, here, roam, non_interactive)
+
+    if agent == "claude":
+        _launch_claude(project_dir, prompt)
+    elif agent == "gemini":
+        _launch_gemini(project_dir)
 
 
 # =============================================================================

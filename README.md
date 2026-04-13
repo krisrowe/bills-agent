@@ -14,85 +14,187 @@ Bills Agent bridges this gap. You declare what bills should exist (properties, c
 - **Promo deadline risks** — deferred interest deadlines approaching (Monarch doesn't track these)
 - **Disconnected accounts** — Monarch stopped syncing and you can't see payment status
 
-## What It Includes
-
-- **MCP server** (`bills-mcp`) — manages bill expectations via tools. Works with any MCP-capable agent.
-- **Skills** (`/bills:check`, `/bills:explain`) — workflow instructions in the [Agent Skills](https://agentskills.io) open standard. Portable across platforms.
-- **CLI** (`bills`) — launch helpers, MCP server registration, and standalone reports.
-- **Claude Code plugin** — bundles all of the above plus PostToolUse hooks that cache Monarch API responses to keep the context window clean.
-
 ## Prerequisites
 
 - [Monarch Money](https://www.monarchmoney.com/) account with linked bank accounts
 - [monarch-access](https://github.com/krisrowe/monarch-access) MCP server registered in your agent session
 - Python 3.11+
+- Claude Code CLI installed
 
 > **Note:** Monarch Money is currently the only supported data source. The SDK's
 > inventory engine is decoupled from Monarch — it accepts streams and accounts as
 > plain data — so the architecture supports alternative providers (other financial
 > platforms, local CSV/OFX files, etc.) in the future.
 
-## Setup
+## Quick Start
 
-Choose your path based on your agent platform:
-
-| Platform | What you get | Section |
-|----------|-------------|---------|
-| **Claude Code** | Full plugin: skills + MCP server + context-saving hooks | [Claude Code plugin](#claude-code-plugin) |
-| **Gemini CLI** | MCP server + skills via `gemini skills install` | [Gemini CLI](#gemini-cli) |
-| **Cursor** | MCP server + auto-discovered skills (Agent Skills standard) | [Cursor and Agent Skills](#cursor-and-agent-skills) |
-| **Other platforms** | MCP server + skills loaded as agent instructions | [Fully manual](#fully-manual) |
-| **MCP tools only** | Just the tools, no skills or hooks — bring your own workflow | [MCP server only](#mcp-server-only) |
-
-All paths start with [installing the package](#1-install-the-package).
-
-## Installation
-
-### 1. Install the package
+### 1. Install
 
 ```bash
 pipx install git+https://github.com/krisrowe/bills-agent.git
 ```
 
-This installs three commands: `bills` (CLI), `bills-mcp` (MCP server), and `bills-report` (standalone reports).
-
-### Claude Code plugin
-
-The plugin bundles skills, MCP server, and PostToolUse hooks that cache Monarch
-responses to keep context clean. This is the most complete installation path.
-
-**Register a marketplace** that carries the plugin. Check if you already have one:
+### 2. Launch
 
 ```bash
-claude plugin marketplace list
+cd ~/my-finances    # or wherever you keep financial files
+bills
 ```
 
-If you don't have a marketplace with `bills`, see [MARKETPLACE.md](MARKETPLACE.md)
-for how to add this plugin to a new or existing marketplace.
+On first run, `bills` walks you through two one-time choices:
 
-**Install the plugin** into a project directory where you keep bill-related files —
-receipts, statements, CSVs, financial records, etc.:
+**Agent** — if both Claude Code and Gemini CLI are installed, you pick which one.
+If only one is found, it's selected automatically.
 
-```bash
-cd ~/my-finances
-claude plugin install bills@<marketplace-name> --scope project
+**Project directory** — pin the current directory or roam:
+
+```
+No project directory configured. Current directory: /home/user/my-finances
+
+  [1] Save this directory (future runs return here)
+  [2] Roam (always use whatever directory you're in)
+
+Choice [1/2]:
 ```
 
-Or install at user scope to make it available in all sessions:
+Pick **1** if you have a dedicated folder for financial files — future `bills`
+invocations return here automatically, from anywhere. Pick **2** to always launch
+from whatever directory you're in.
+
+Both choices are saved to `~/.config/bills/launcher.json` and remembered for
+future runs. After that, `bills` is all you type.
+
+### 3. Run your first bill check
+
+```
+/bills:check
+```
+
+The agent walks you through everything interactively:
+
+- Loads your Monarch recurring streams and account data
+- Asks you to declare properties, credit accounts, and expected bills
+- Helps link your declarations to Monarch's live data
+- Presents a prioritized summary of overdue payments, missing bills, and risks
+
+No manual config is required beforehand. Configuration builds up through
+conversation and is saved automatically to `~/.config/bills/config.yaml`.
+Each subsequent check is faster as your declarations accumulate.
+
+### 4. Explain a credit card balance
+
+```
+/bills:explain
+```
+
+Walks through a credit card's statement cycles, charges, payments, and interest
+to explain how the current balance was reached. Use anytime — independent of
+the bill check workflow.
+
+### Launcher options
 
 ```bash
+bills                   # uses saved agent + project dir (prompts on first run)
+bills --here            # pin to current directory (saves for future runs)
+bills --roam            # always use cwd (saves preference)
+bills -C /path          # use this directory once (doesn't save)
+bills --agent claude    # switch to Claude Code (saves for future runs)
+bills --agent gemini    # switch to Gemini CLI (saves for future runs)
+bills --non-interactive # fail instead of prompting (for scripts)
+```
+
+If the saved directory is moved or deleted, `bills` exits with an error
+and a hint to run `--here` from the new location.
+
+## Two Ways to Use the Plugin (Claude Code)
+
+The quick start above uses the `bills` launcher, which loads the plugin directly from
+the installed package at launch time. You can also install the plugin persistently through
+a Claude Code marketplace. Both give you the same skills, MCP tools, and hooks — they
+differ in how the plugin gets loaded and when changes take effect.
+
+### Option A: `bills` launcher (recommended)
+
+```bash
+pipx install git+https://github.com/krisrowe/bills-agent.git
+bills
+```
+
+**What it does:** Detects your agent (Claude Code or Gemini CLI), launches it with
+the plugin loaded from the installed package, and pre-approves read-only tools.
+
+| Advantage | Detail |
+|-----------|--------|
+| **Zero marketplace setup** | One `pipx install`, one command. No marketplace registration, no plugin install steps. |
+| **Read-only tools pre-approved** | Account lists, transaction queries, inventory builds, and Monarch reads don't require per-tool approval. Write operations still prompt. |
+| **Instant updates** | `pipx install --force git+https://...` and restart. No version bumps, marketplace syncs, or plugin reinstalls. |
+| **Development friendly** | Clone the repo, `pip install -e .`, and `bills` pulls directly from your working tree. Edit a skill, restart, changes are live. No commit/push/marketplace cycle. |
+| **Remembers your project dir** | Pins to a financial files directory so you can launch from anywhere. |
+| **Agent-agnostic** | Works with Claude Code and Gemini CLI. Remembers your choice. |
+
+| Limitation | Detail |
+|------------|--------|
+| **Session-scoped** | Plugin loads only when launched via `bills`. Opening Claude Code normally won't have it. |
+| **Dedicated launcher** | You run `bills` instead of `claude`. If you have other plugins or workflows that launch Claude Code differently, you'd need to incorporate `--plugin-dir` yourself. |
+
+### Option B: Installed plugin (marketplace)
+
+```bash
+claude plugin marketplace add https://github.com/<marketplace-repo>.git
 claude plugin install bills@<marketplace-name> --scope user
 ```
 
-**Verify** — start a new Claude Code session and check that `/bills:check` and
-`/bills:explain` appear as available skills and `bills-mcp` tools are listed.
+| Advantage | Detail |
+|-----------|--------|
+| **Always available** | Plugin loads in every Claude Code session (user scope) or every session in a project (project scope). No special launcher needed. |
+| **Works with other launch methods** | `claude`, IDE extensions, or any workflow that starts Claude Code picks up the plugin automatically. |
+| **Scope control** | Install at project scope for a dedicated finances directory, or user scope for global availability. |
 
-**For development** — load the plugin from a local clone without the marketplace.
-Does not persist across sessions:
+| Limitation | Detail |
+|------------|--------|
+| **Marketplace overhead** | Requires a marketplace repo, registration, and `claude plugin install`. |
+| **Update ceremony** | Changes require: version bump in `plugin.json` → commit → push → `claude plugin marketplace update` → `claude plugin update`. |
+| **No pre-approved tools** | All tools prompt for approval on first use per session. You can configure allow-lists in `.claude/settings.json` manually. |
+| **Plugin also installed?** | If you have the plugin installed *and* run `bills`, `--plugin-dir` takes precedence for that session. No conflicts, but the installed copy is ignored. |
 
-```bash
-claude --plugin-dir path/to/bills-agent/claude/plugin
-```
+### Which should I use?
+
+**Use `bills`** if you primarily check bills from a terminal and want the
+fastest setup and update path. Especially if you're forking or contributing to
+the repo — editable installs (`pip install -e .`) mean every code change is live
+on the next restart with no publish cycle.
+
+**Use the installed plugin** if you want bills available in every Claude Code session
+without thinking about it, or if you use Claude Code through an IDE extension where
+a dedicated launcher isn't practical.
+
+**Both at once** works fine. The installed plugin provides ambient availability;
+`bills` overrides it with the latest package version and pre-approved tools
+when you want a focused bill-checking session.
+
+## What It Includes
+
+- **MCP server** (`bills-mcp`) — manages bill expectations via tools. Works with any MCP-capable agent.
+- **Skills** — workflow instructions in the [Agent Skills](https://agentskills.io) open standard:
+  - `/bills:check` — full bill review: cross-reference, reconcile, report, triage
+  - `/bills:explain` — credit card balance walkthrough
+  - `/bills:check-credit-cards` — quick credit card payment verification
+- **CLI** (`bills`) — launcher, MCP server registration, and standalone reports.
+- **Claude Code plugin** — bundles all of the above plus PostToolUse hooks that cache Monarch API responses to keep the context window clean.
+
+### About PostToolUse hooks
+
+The Claude Code plugin includes hooks that intercept Monarch API responses
+(`list_recurring`, `list_accounts`, `list_categories`), extract only the fields
+the inventory engine needs, cache to disk, and replace the large response with
+a short summary. Monarch responses can be 50-100KB — hooks keep this out of
+the agent's context window.
+
+Other platforms don't get hooks. The full responses land in context instead.
+This still works — the inventory engine reads from cache files if available, or
+the agent can pass data directly. It just uses more context.
+
+## Other Platforms
 
 ### Gemini CLI
 
@@ -179,51 +281,6 @@ bills register claude --scope project  # project-scoped (.claude/settings.local.
 bills register claude                  # user-scoped (~/.claude/settings.json)
 ```
 
-### About PostToolUse hooks
-
-The Claude Code plugin includes hooks that intercept Monarch API responses
-(`list_recurring`, `list_accounts`, `list_categories`), extract only the fields
-the inventory engine needs, cache to disk, and replace the large response with
-a short summary. Monarch responses can be 50-100KB — hooks keep this out of
-the agent's context window.
-
-Other platforms don't get hooks. The full responses land in context instead.
-This still works — the inventory engine reads from cache files if available, or
-the agent can pass data directly. It just uses more context.
-
-## Quick Start
-
-### 1. Verify monarch-access is connected
-
-Try `list_accounts` in your agent session. If it returns your bank accounts, you're good.
-
-### 2. Run your first bill check
-
-```
-/bills:check
-```
-
-That's it. The agent walks you through everything interactively:
-
-- Loads your Monarch recurring streams and account data
-- Asks you to declare properties, credit accounts, and expected bills
-- Helps link your declarations to Monarch's live data
-- Presents a prioritized summary of overdue payments, missing bills, and risks
-
-No manual setup is required beforehand. Configuration builds up through
-conversation and is saved automatically to `~/.config/bills/config.yaml`.
-Each subsequent check is faster as your declarations accumulate.
-
-### 3. Explain a credit card balance
-
-```
-/bills:explain
-```
-
-Walks through a credit card's statement cycles, charges, payments, and interest
-to explain how the current balance was reached. Use anytime — independent of
-the bill check workflow.
-
 ## Configuration
 
 Configuration is managed entirely through MCP tools during agent sessions — you
@@ -253,7 +310,6 @@ Use `register_property_bill` to add bills beyond the template.
 
 Templates can be chained — rental_vacation inherits from real_estate, so vacation rentals
 automatically get Mortgage and Property Tax plus their own bills.
-
 
 ## MCP Tools
 
@@ -300,59 +356,69 @@ automatically get Mortgage and Property Tax plus their own bills.
 - `validate_config` — verify config and return summary
 - `show_config_path` — show config file location
 
-## CLI
+## CLI Reference
 
-The `bills` command provides launch helpers and standalone reports.
+### `bills`
 
-### Launch with plugin attached
+Launch your agent with the bills plugin, pre-approved read-only tools, and
+project directory management. Auto-detects Claude Code or Gemini CLI.
 
 ```bash
-bills claude    # launch Claude Code with bills plugin
+bills                         # launch with saved preferences (prompts on first run)
+bills --here                  # save current dir, launch from here
+bills --roam                  # save roam preference, always use cwd
+bills -C ~/finances           # use this dir once (doesn't save)
+bills --agent claude          # switch to Claude Code (saves preference)
+bills --agent gemini          # switch to Gemini CLI (saves preference)
+bills --non-interactive       # fail instead of prompting (for scripts)
+bills --prompt <name>         # use a different system prompt (Claude only)
 ```
 
-### Standalone reports (no AI agent needed)
+Preferences are saved to `~/.config/bills/launcher.json`.
+
+### `bills register`
 
 ```bash
-bills-report summary       # config summary: account counts, properties, promos
-bills-report overdue       # overdue detection (stub — needs Monarch integration)
-bills-report due-soon      # due-soon detection (stub — needs date calculation)
+bills register claude --scope user     # register in ~/.claude/settings.json
+bills register claude --scope project  # register in .claude/settings.local.json
+bills register gemini                  # link extension with Gemini CLI
+```
+
+### `bills unregister`
+
+```bash
+bills unregister claude --scope user
+bills unregister claude --scope project
+```
+
+### `bills-report`
+
+Standalone reports (no AI agent needed):
+
+```bash
+bills-report summary                # config summary: account counts, properties, promos
 bills-report summary --format json  # JSON output
+bills-report overdue                # overdue detection (stub)
+bills-report due-soon               # due-soon detection (stub)
 ```
 
 ## Updating
-
-When a new version is released, update the package first, then update the plugin
-or skills on your platform.
-
-### Package
 
 ```bash
 pipx install --force git+https://github.com/krisrowe/bills-agent.git
 ```
 
-### Claude Code plugin
+Then restart `bills`. Changes take effect immediately.
+
+If using the installed plugin path, also update the plugin:
 
 ```bash
 claude plugin marketplace update <marketplace-name>
 claude plugin update bills@<marketplace-name>
 ```
 
-Then restart Claude Code. `/reload-plugins` is not sufficient for version changes —
-you must exit and start a new session.
-
-**Note:** `claude plugin update` only detects changes if the `version` field in
-`claude/plugin/.claude-plugin/plugin.json` has been incremented. If the version
-hasn't changed, Claude Code treats the plugin as up-to-date and skips the update.
-
-### Gemini CLI skills
-
-```bash
-# If installed from git, reinstall to pick up changes:
-gemini skills uninstall check
-gemini skills install https://github.com/krisrowe/bills-agent.git --path claude/plugin/skills/check
-
-# If linked from a local clone, changes are picked up automatically.
-```
+Then restart Claude Code. `claude plugin update` only detects changes if the
+`version` field in `plugin.json` has been incremented.
 
 ## Development
 
@@ -370,6 +436,17 @@ Or manually:
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
+```
+
+### Developing with `bills`
+
+An editable install (`pip install -e .`) means `bills` loads the plugin
+directly from your working tree. Edit a skill or SDK file, restart the agent,
+and the change is live. No commit, push, version bump, or marketplace update needed.
+
+```bash
+pip install -e ".[dev]"
+bills
 ```
 
 ## License
