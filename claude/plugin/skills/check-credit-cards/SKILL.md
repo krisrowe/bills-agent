@@ -58,6 +58,28 @@ category names include "Credit Card Payment", "Payment", "Transfer".
 
 Pull at least the **last 2 payments** to show both current and prior cycle.
 
+## Phase 3b: Fallback — Search Funding Side for Disconnected Accounts
+
+When Phase 3 returns no transactions for an account due to:
+- Credential `updateRequired` (⚡ disconnected)
+- No Monarch account match (❌ no link)
+
+Search from the **funding side** instead:
+
+1. Call `list_transactions` with **no `account_ids` filter**, using `search`
+   set to the institution/issuer name (e.g., "First National", "Acme Bank")
+2. Try multiple search terms if the first returns nothing:
+   - Issuer name (e.g., "First National", "Acme Bank")
+   - Card brand or program name (e.g., "Rewards Plus", "Travel Card")
+   - Account name from config
+3. Results will show outgoing debits from checking/savings accounts —
+   these are the payments to the disconnected card
+4. Note which checking account the payment came from (useful for updating
+   `funding_account` in config if not set)
+
+This is the **primary** method for disconnected accounts, not optional.
+Always attempt it before reporting "no payment found."
+
 ## Phase 4: Cross-Reference Funding Accounts
 
 For each payment found on the credit card side, optionally identify which
@@ -77,12 +99,16 @@ funding accounts).
 Build a table with one row per declared credit account:
 
 ```
-| # | Account | Balance | Due | Last Payment | Date | Prior Payment | Date | Paid From |
-|---|---------|---------|-----|-------------|------|---------------|------|-----------|
+| # |   | Account | Balance | Due | Last Payment | Date | Prior Payment | Date | Paid From |
+|---|---|---------|---------|-----|-------------|------|---------------|------|-----------|
 ```
 
+The second column is a **status icon** (blank when healthy):
+- ⚡ = Monarch credential needs refresh (`updateRequired`) — balance/transactions may be stale
+- ❌ = No Monarch account linked — can't query directly
+
 Column definitions:
-- **Account** — name and last4 from config (e.g., "Chase Freedom (...5035)")
+- **Account** — name and last4 from config (e.g., "Sapphire Rewards (...1234)")
 - **Balance** — current balance from Monarch `list_accounts`
 - **Due** — day of month from config `due_day` (e.g., "9th")
 - **Last Payment** — most recent payment amount
