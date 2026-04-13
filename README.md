@@ -19,7 +19,7 @@ Bills Agent bridges this gap. You declare what bills should exist (properties, c
 - [Monarch Money](https://www.monarchmoney.com/) account with linked bank accounts
 - [monarch-access](https://github.com/krisrowe/monarch-access) MCP server registered in your agent session
 - Python 3.11+
-- Claude Code CLI installed
+- [Claude Code](https://code.claude.com/) or [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed
 
 > **Note:** Monarch Money is currently the only supported data source. The SDK's
 > inventory engine is decoupled from Monarch — it accepts streams and accounts as

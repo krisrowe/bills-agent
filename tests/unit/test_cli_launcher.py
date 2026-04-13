@@ -361,3 +361,61 @@ class TestPreferencePersistence:
         )
         assert result.returncode == 0
         assert invocation["cwd"] == str(project_dir)
+
+    def test_here_overrides_roam(self, fake_agent, isolated_env, tmp_path):
+        """--here after --roam exits roam mode and pins to cwd."""
+        config_dir, _, _ = isolated_env
+        pin_dir = tmp_path / "pin_here"
+        pin_dir.mkdir()
+
+        _, record_file = fake_agent
+
+        # First: set roam
+        _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--roam"],
+        )
+        prefs = json.loads((config_dir / "bills" / "launcher.json").read_text())
+        assert prefs["project_dir"] == "."
+
+        record_file.unlink(missing_ok=True)
+
+        # Second: pin with --here
+        _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--here"],
+            cwd=str(pin_dir),
+        )
+        prefs = json.loads((config_dir / "bills" / "launcher.json").read_text())
+        assert prefs["project_dir"] == str(pin_dir)
+
+
+# =============================================================================
+# Launch — Gemini
+# =============================================================================
+
+
+class TestLaunchGemini:
+    def test_gemini_passes_extension_flag(self, fake_agent, isolated_env):
+        """Gemini launch uses --extension with the gemini extension path."""
+        result, invocation = _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--agent", "gemini", "--here"],
+            agent="gemini",
+        )
+        assert result.returncode == 0
+        assert invocation is not None, "Fake agent was not invoked"
+        assert "--extension" in invocation["args"]
+
+    def test_gemini_lands_in_project_dir(self, fake_agent, isolated_env, tmp_path):
+        """Gemini agent starts in the resolved project directory."""
+        project_dir = tmp_path / "gemini_finances"
+        project_dir.mkdir()
+        result, invocation = _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--agent", "gemini", "--here"],
+            agent="gemini",
+            cwd=str(project_dir),
+        )
+        assert result.returncode == 0
+        assert invocation["cwd"] == str(project_dir)

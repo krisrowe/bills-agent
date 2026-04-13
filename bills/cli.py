@@ -249,7 +249,7 @@ def _launch_gemini(project_dir: str):
 
     extension_path = files("bills") / ".." / "gemini"
 
-    cmd = ["gemini", "--extension", str(extension_path)]
+    cmd = [_agent_command("gemini"), "--extension", str(extension_path)]
     subprocess.run(cmd)
 
 

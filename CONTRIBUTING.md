@@ -33,12 +33,13 @@ BILLS-AGENT REPO (this repo — defines HOW to check bills)
     filters.py                ← bill filter pattern matching (fnmatch)
     budget.py                 ← budget scope SDK functions
   bills/mcp/server.py        ← thin MCP wrapper, calls SDK
-  bills/cli.py               ← CLI commands (launch, register)
+  bills/cli.py               ← CLI launcher + register + reports
   claude/plugin/             ← Claude Code plugin
     .claude-plugin/plugin.json
     .mcp.json                 ← points to bills-mcp command
     skills/check/SKILL.md     ← cross-reference workflow
     skills/explain/SKILL.md   ← CC balance walkthrough
+    skills/check-credit-cards/SKILL.md ← quick CC payment verification
 
 USER CONFIG (~/.config/bills/ — user's declared expectations)
   config.yaml                 ← credit accounts, properties, bills,
@@ -239,15 +240,39 @@ Walks through a credit card's transaction history in segments (between payments/
 
 ## CLI
 
-The `bills` CLI (`bills/cli.py`) provides launch helpers, MCP server registration,
-and standalone reports. It is a thin wrapper — no business logic.
+The `bills` CLI (`bills/cli.py`) is the unified launcher and management tool.
+It is a thin wrapper — no business logic.
 
-### Commands
+### Launcher (`bills` with no subcommand)
+
+Running `bills` with no subcommand launches an agent (Claude Code or Gemini CLI)
+with the plugin attached, pre-approved read-only tools, and a managed project directory.
+
+**Agent detection:** On first run, `bills` checks which agent CLIs are on PATH
+via `shutil.which`. If only one is found, it's selected automatically. If both
+are found, the user picks interactively. The choice is saved to
+`~/.config/bills/launcher.json` and reused on subsequent runs. `--agent claude`
+or `--agent gemini` overrides and saves the preference.
+
+**Project directory:** On first run, the user chooses to pin the current directory
+or roam. Pinned means `bills` always `os.chdir()` to the saved path before launching.
+Roam means it uses whatever cwd the caller is in. `--here` pins to cwd, `--roam`
+enables roaming, `-C <dir>` overrides once without saving.
+
+**Pre-approved tools:** The Claude launcher passes `--allowedTools` for read-only
+tools from both `bills-mcp` and `monarch-access`, so data loading doesn't require
+per-tool approval. Write operations still prompt. This is the only way to
+pre-approve tools at launch — Claude Code plugins cannot declare allowed tools
+in their configuration, and the alternative is manually editing `.claude/settings.json`.
+
+**Agent command substitution:** For testing, set `BILLS_AGENT_CLAUDE` or
+`BILLS_AGENT_GEMINI` to override the command used. Tests point these to a fake
+agent script that records its args and exits. See `tests/unit/test_cli_launcher.py`.
+
+### Subcommands
 
 | Command | Description |
 |---------|-------------|
-| `bills claude` | Launch Claude Code with the bills plugin attached (`--plugin-dir`) |
-| `bills gemini` | Launch Gemini CLI with the bills extension |
 | `bills register claude [--scope user\|project]` | Register `bills-mcp` in Claude Code settings |
 | `bills register gemini` | Link bills extension with Gemini CLI |
 | `bills unregister claude [--scope user\|project]` | Remove `bills-mcp` from Claude Code settings |
@@ -261,22 +286,32 @@ and standalone reports. It is a thin wrapper — no business logic.
 - `bills-mcp` → `bills.mcp.server:run_server`
 - `bills-report` → `bills.cli:report`
 
+### Preferences file
+
+`~/.config/bills/launcher.json` stores:
+- `agent` — `"claude"` or `"gemini"`
+- `project_dir` — absolute path or `"."` (roam sentinel)
+
 ## Development Loop
 
 ### Testing locally (no commit/push needed)
 
-For skill changes (SKILL.md) — just restart Claude Code with the local plugin:
+With an editable install (`pip install -e .`), `bills` loads the plugin directly
+from your working tree. Edit a skill or SDK file, restart the agent, and the
+change is live.
+
 ```bash
-claude --plugin-dir path/to/bills-agent/claude/plugin
+pip install -e ".[dev]"
+bills
 ```
 
-For SDK/MCP code changes (inventory.py, server.py, etc.) — also reinstall the package:
+For SDK/MCP code changes that affect the installed `bills-mcp` command (e.g.,
+new tools, model changes), reinstall:
+
 ```bash
 pipx install --force .
-claude --plugin-dir path/to/bills-agent/claude/plugin
+bills
 ```
-
-This loads the plugin directly from your working tree. No commit, no push, no marketplace update. Iterate until it works, then release.
 
 ### Releasing Changes
 
@@ -312,6 +347,10 @@ at runtime with `FileNotFoundError`.
 - Tests are isolated via `XDG_CONFIG_HOME` fixture — no real config touched
 - Sociable unit tests — no mocks, real config read/write to temp dirs
 - Test names describe scenario + outcome, not implementation
+- **CLI launcher tests** (`test_cli_launcher.py`) use `BILLS_AGENT_CLAUDE` /
+  `BILLS_AGENT_GEMINI` env vars to substitute a fake agent script that records
+  its args and exits. No real agent is ever invoked. See "Agent command
+  substitution" in the CLI section above.
 
 ## Data Privacy
 
@@ -399,15 +438,9 @@ remove as needed. Amounts, due dates, and payment status come from Monarch live.
 
 ## Future Enhancements
 
-### CLI-Driven Project Install
+### Prerequisite Verification
 
-A `bills install` (or `bills setup`) CLI command that bootstraps a Claude Code project for bill checking:
-
-1. **Verify prerequisites** — check that `monarch-access` is installed and accessible (e.g., `which monarch-mcp` or test MCP connectivity). If missing, offer to install it locally as stdio given a Monarch token.
-2. **Install/update the plugin** — run the Claude Code plugin install commands (`claude plugin marketplace add`, `claude plugin install`) or reinstall the latest version into the project at CWD.
-3. **Configure safe tool permissions** — add read-only tools from both `bills-mcp` and `monarch-access` to the project's `.claude/settings.json` allow-list so Phase 1 data loading doesn't require per-tool approval. Tools to auto-allow:
-   - `mcp__plugin_bills_manager__list_*`, `get_*`, `show_*`, `validate_*`
-   - `mcp__monarch-access__list_*`, `get_*`
-4. **Validate config** — run `validate_config` and report any issues with the user's `~/.config/bills/config.yaml`.
-
-This reduces the friction of first-time setup and ensures consistent configuration across projects that use the bill checking workflow.
+The `bills` launcher handles project directory management and tool pre-approval,
+but doesn't verify that `monarch-access` is installed and reachable. A future
+enhancement could check for `monarch-mcp` on PATH at launch time and offer to
+install it if missing.
