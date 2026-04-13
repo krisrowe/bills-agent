@@ -59,6 +59,17 @@ The `/bills:check` skill orchestrates tools from two independent MCP servers:
 
 The plugin does not bundle monarch-access. It must be registered in the user's Claude Code session independently. The skill references tools from both servers and the agent resolves them at runtime.
 
+**Data provider decoupling.** The SDK's inventory engine accepts streams, accounts,
+and categories as plain data — it has no direct dependency on the Monarch API. The
+Monarch coupling lives in the skills (which name monarch-access tools) and the hooks
+(which parse Monarch response shapes). This architecture is ready for a provider
+pattern where the data source could be another financial platform, a local CSV/OFX
+ledger, or any MCP server that produces the same data shapes.
+
+**Maintain this boundary.** Never import monarch-access or call the Monarch API from
+SDK code. The SDK must remain data-source-agnostic — it receives data, it doesn't
+fetch it. Monarch-specific logic belongs only in skills and hooks.
+
 ### What the Config Tracks
 
 | Section | Purpose | Monarch equivalent |

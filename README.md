@@ -16,17 +16,35 @@ Bills Agent bridges this gap. You declare what bills should exist (properties, c
 
 ## What It Includes
 
-- **Claude Code plugin** with `/bills:check` and `/bills:explain` skills
-- **MCP server** (`bills-mcp`) for managing bill expectations via tools
-- **CLI** (`bills`) for launching Claude with the plugin, registering the MCP server, and running standalone reports
-- **PostToolUse hooks** that automatically cache Monarch API responses to disk, keeping large payloads out of the conversation context
+- **MCP server** (`bills-mcp`) — manages bill expectations via tools. Works with any MCP-capable agent.
+- **Skills** (`/bills:check`, `/bills:explain`) — workflow instructions in the [Agent Skills](https://agentskills.io) open standard. Portable across platforms.
+- **CLI** (`bills`) — launch helpers, MCP server registration, and standalone reports.
+- **Claude Code plugin** — bundles all of the above plus PostToolUse hooks that cache Monarch API responses to keep the context window clean.
 
 ## Prerequisites
 
 - [Monarch Money](https://www.monarchmoney.com/) account with linked bank accounts
 - [monarch-access](https://github.com/krisrowe/monarch-access) MCP server registered in your agent session
 - Python 3.11+
-- An MCP-capable agent platform (Claude Code, Gemini CLI, Cursor, Antigravity, etc.)
+
+> **Note:** Monarch Money is currently the only supported data source. The SDK's
+> inventory engine is decoupled from Monarch — it accepts streams and accounts as
+> plain data — so the architecture supports alternative providers (other financial
+> platforms, local CSV/OFX files, etc.) in the future.
+
+## Setup
+
+Choose your path based on your agent platform:
+
+| Platform | What you get | Section |
+|----------|-------------|---------|
+| **Claude Code** | Full plugin: skills + MCP server + context-saving hooks | [Claude Code plugin](#claude-code-plugin) |
+| **Gemini CLI** | MCP server + skills via `gemini skills install` | [Gemini CLI](#gemini-cli) |
+| **Cursor** | MCP server + auto-discovered skills (Agent Skills standard) | [Cursor and Agent Skills](#cursor-and-agent-skills) |
+| **Other platforms** | MCP server + skills loaded as agent instructions | [Fully manual](#fully-manual) |
+| **MCP tools only** | Just the tools, no skills or hooks — bring your own workflow | [MCP server only](#mcp-server-only) |
+
+All paths start with [installing the package](#1-install-the-package).
 
 ## Installation
 
@@ -38,54 +56,47 @@ pipx install git+https://github.com/krisrowe/bills-agent.git
 
 This installs three commands: `bills` (CLI), `bills-mcp` (MCP server), and `bills-report` (standalone reports).
 
-### 2. Register a marketplace that carries this plugin
+### Claude Code plugin
 
-The plugin installs through a Claude Code marketplace. Check if you already have one registered:
+The plugin bundles skills, MCP server, and PostToolUse hooks that cache Monarch
+responses to keep context clean. This is the most complete installation path.
+
+**Register a marketplace** that carries the plugin. Check if you already have one:
 
 ```bash
 claude plugin marketplace list
 ```
 
-If you don't have a marketplace with `bills`, you'll need to add one. See [MARKETPLACE.md](MARKETPLACE.md) for how to add this plugin to a new or existing marketplace.
+If you don't have a marketplace with `bills`, see [MARKETPLACE.md](MARKETPLACE.md)
+for how to add this plugin to a new or existing marketplace.
 
-### 3. Install the plugin
-
-Install into a project directory where you keep bill-related files — receipts, statements, CSVs, financial records, etc. This scopes the plugin's skills and tools to sessions launched from that directory:
+**Install the plugin** into a project directory where you keep bill-related files —
+receipts, statements, CSVs, financial records, etc.:
 
 ```bash
 cd ~/my-finances
 claude plugin install bills@<marketplace-name> --scope project
 ```
 
-Alternatively, install at user scope to make the plugin available in every Claude Code session on the machine. This means the skills and MCP tools are always resident regardless of which directory you're working in:
+Or install at user scope to make it available in all sessions:
 
 ```bash
 claude plugin install bills@<marketplace-name> --scope user
 ```
 
-The plugin provides `/bills:check` and `/bills:explain` skills, the `bills-mcp` MCP server for managing bill expectations, and PostToolUse hooks that cache Monarch data automatically.
+**Verify** — start a new Claude Code session and check that `/bills:check` and
+`/bills:explain` appear as available skills and `bills-mcp` tools are listed.
 
-### 4. Verify
-
-Start a new Claude Code session (from the project directory if you used `--scope project`) and check:
-- `/bills:check` and `/bills:explain` appear as available skills
-- `bills-mcp` tools are listed under the plugin's MCP server
-
-### Alternative: Load plugin from a local clone
-
-Useful for development and debugging — loads the plugin directly from your working tree without going through the marketplace. Does not persist across sessions.
+**For development** — load the plugin from a local clone without the marketplace.
+Does not persist across sessions:
 
 ```bash
 claude --plugin-dir path/to/bills-agent/claude/plugin
 ```
 
-### Alternative: Any MCP-capable agent platform
+### Gemini CLI
 
-The MCP server and skills are not Claude-specific. Any agent platform that supports MCP
-can use bills-agent — Gemini CLI, Cursor, Antigravity, or others.
-
-**Step 1: Register the MCP server.** Configure your platform to run `bills-mcp` as a
-stdio MCP server. For example, in Gemini CLI (`.gemini/settings.json`):
+**Register the MCP server** in `.gemini/settings.json`:
 
 ```json
 {
@@ -97,16 +108,7 @@ stdio MCP server. For example, in Gemini CLI (`.gemini/settings.json`):
 }
 ```
 
-Or use the built-in CLI helper for supported platforms:
-
-```bash
-bills register claude --scope project
-bills register gemini
-```
-
-**Step 2: Install the skills.** The skill files describe the bill check and
-balance explanation workflows. Platforms with native skill support can install
-them directly. For Gemini CLI:
+**Install the skills:**
 
 ```bash
 gemini skills install https://github.com/krisrowe/bills-agent.git --path claude/plugin/skills/check
@@ -120,27 +122,10 @@ gemini skills link path/to/bills-agent/claude/plugin/skills/check
 gemini skills link path/to/bills-agent/claude/plugin/skills/explain
 ```
 
-For platforms without a skill install mechanism, load the SKILL.md files into
-your agent's context or instruction mechanism. They're plain markdown — copy
-them into your project if needed.
+### Cursor and Agent Skills
 
-**What you don't get without the Claude Code plugin:** PostToolUse hooks. When
-installed as a plugin, hooks automatically intercept Monarch API responses
-(`list_recurring`, `list_accounts`, `list_categories`), extract only the fields
-the inventory engine needs, cache the result to disk, and replace the large MCP
-response with a short summary. This keeps the agent's context window clean —
-Monarch responses can be 50-100KB of JSON.
-
-Without hooks, the full Monarch responses land in the conversation context. This
-still works — the inventory engine reads from the cached files if available, or
-the agent can pass data directly. It just uses more context and may require
-larger context windows for accounts with many recurring streams.
-
-### Alternative: Cursor and other Agent Skills-compatible platforms
-
-The skills in this repo use the [Agent Skills](https://agentskills.io) open
-standard (`SKILL.md` with YAML frontmatter). Platforms that support this standard
-can use them directly.
+The skills use the [Agent Skills](https://agentskills.io) open standard. Cursor
+auto-discovers them and can install directly from GitHub.
 
 **MCP server** — add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
 
@@ -154,11 +139,8 @@ can use them directly.
 }
 ```
 
-**Skills** — Cursor auto-discovers skills from `.claude/skills/` for compatibility,
-or you can install from GitHub via Cursor Settings → Rules → Add Rule → Remote Rule.
-Point it at this repository.
-
-You can also copy the skill directories into any of the standard skill locations:
+**Skills** — install from GitHub via Cursor Settings → Rules → Add Rule → Remote Rule,
+or copy the skill directories into any standard location:
 
 ```
 .agents/skills/       # project-level (Agent Skills standard)
@@ -166,16 +148,13 @@ You can also copy the skill directories into any of the standard skill locations
 ~/.cursor/skills/     # user-level (global)
 ```
 
-Each skill is a folder with a `SKILL.md` — the format is the same across all
-platforms that support the standard.
+Cursor also auto-discovers skills from `.claude/skills/` for compatibility.
 
-### Alternative: Fully manual agent installation
+### Fully manual
 
-For platforms that don't support Agent Skills or MCP auto-discovery, wire up
-two things manually:
+For platforms without native skill or MCP discovery, wire up two things:
 
-**MCP server:** Most MCP-capable platforms use a JSON config with a `mcpServers`
-key. Add an entry for `bills-mcp`:
+**MCP server** — add to your platform's MCP config:
 
 ```json
 {
@@ -187,36 +166,36 @@ key. Add an entry for `bills-mcp`:
 }
 ```
 
-**Skills:** Copy the contents of `claude/plugin/skills/check/SKILL.md` and
+**Skills** — copy `claude/plugin/skills/check/SKILL.md` and
 `claude/plugin/skills/explain/SKILL.md` into your platform's agent instruction
-mechanism — system prompt, rules directory, or equivalent. The skill files are
-plain markdown. Only the delivery mechanism is platform-specific.
+mechanism (system prompt, rules directory, etc.). They're plain markdown.
 
-### Alternative: Register MCP server only (no skills)
+### MCP server only
 
-If you only need the MCP tools (e.g., you have your own workflow or just want
-programmatic access to bill config):
+If you only need the tools without skills or hooks:
 
 ```bash
 bills register claude --scope project  # project-scoped (.claude/settings.local.json)
 bills register claude                  # user-scoped (~/.claude/settings.json)
 ```
 
-To unregister:
+### About PostToolUse hooks
 
-```bash
-bills unregister claude --scope project
-bills unregister claude
-```
+The Claude Code plugin includes hooks that intercept Monarch API responses
+(`list_recurring`, `list_accounts`, `list_categories`), extract only the fields
+the inventory engine needs, cache to disk, and replace the large response with
+a short summary. Monarch responses can be 50-100KB — hooks keep this out of
+the agent's context window.
+
+Other platforms don't get hooks. The full responses land in context instead.
+This still works — the inventory engine reads from cache files if available, or
+the agent can pass data directly. It just uses more context.
 
 ## Quick Start
 
-### 1. Verify monarch-access is working
+### 1. Verify monarch-access is connected
 
-Before your first bill check, make sure the [monarch-access](https://github.com/krisrowe/monarch-access)
-MCP server is registered and can reach your Monarch account. Try calling
-`list_accounts` in your agent session — if it returns your bank accounts,
-you're good.
+Try `list_accounts` in your agent session. If it returns your bank accounts, you're good.
 
 ### 2. Run your first bill check
 
@@ -323,24 +302,12 @@ automatically get Mortgage and Property Tax plus their own bills.
 
 ## CLI
 
-The `bills` command provides launch helpers, registration, and standalone reports.
+The `bills` command provides launch helpers and standalone reports.
 
 ### Launch with plugin attached
 
 ```bash
 bills claude    # launch Claude Code with bills plugin
-bills gemini    # launch Gemini CLI with bills extension
-```
-
-### Register / unregister MCP server
-
-```bash
-bills register claude                  # user-scoped
-bills register claude --scope project  # project-scoped
-bills register gemini
-
-bills unregister claude
-bills unregister claude --scope project
 ```
 
 ### Standalone reports (no AI agent needed)
@@ -392,9 +359,17 @@ gemini skills install https://github.com/krisrowe/bills-agent.git --path claude/
 ```bash
 git clone https://github.com/krisrowe/bills-agent.git
 cd bills-agent
+make setup    # prepare venv for testing
+make test     # run unit tests (pytest, configured via pytest.ini)
+make test-all # run all tests including integration
+```
+
+Or manually:
+
+```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m pytest tests/
+pytest
 ```
 
 ## License
