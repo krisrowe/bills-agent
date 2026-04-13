@@ -55,6 +55,21 @@ def _update_pref(key: str, value: str) -> None:
 
 _ROAM_SENTINEL = "."
 
+_SKILL_ALIASES = {
+    "cc": "/bills:credit-cards",
+    "credit-cards": "/bills:credit-cards",
+    "check": "/bills:check",
+    "explain": "/bills:explain",
+}
+
+
+def _resolve_initial(value: str) -> str:
+    """Resolve an --initial value: skill alias, slash command, or freeform prompt."""
+    resolved = _SKILL_ALIASES.get(value)
+    if resolved:
+        return resolved
+    return value
+
 
 # =============================================================================
 # Agent Detection
@@ -204,7 +219,8 @@ def _resolve_project_dir(
 # =============================================================================
 
 
-def _launch_claude(project_dir: str, user_prompt: str | None = None):
+def _launch_claude(project_dir: str, user_prompt: str | None = None,
+                   print_mode: bool = False):
     """Launch Claude Code with plugin and pre-approved tools."""
     os.chdir(project_dir)
 
@@ -238,7 +254,10 @@ def _launch_claude(project_dir: str, user_prompt: str | None = None):
         cmd.extend(["--allowedTools", tool])
 
     if user_prompt is not None:
-        cmd.extend(["-p", user_prompt])
+        if print_mode:
+            cmd.extend(["-p", user_prompt])
+        else:
+            cmd.append(user_prompt)
 
     subprocess.run(cmd)
 
@@ -267,11 +286,12 @@ def _launch_gemini(project_dir: str, user_prompt: str | None = None):
 @click.option("--agent", "agent_override", default=None, type=click.Choice(["claude", "gemini"]),
               help="Use this agent (saves for future runs)")
 @click.option("--non-interactive", is_flag=True, help="Fail instead of prompting for input")
-@click.option("-p", "user_prompt", default=None, help="Run non-interactively with this prompt (passed to agent as -p)")
+@click.option("-p", "print_prompt", default=None, help="Run non-interactively with this prompt (print and exit)")
+@click.option("-i", "--initial", default=None, help="Start session with a prompt or skill alias (e.g., cc, check, explain)")
 @click.pass_context
 def main(ctx, here: bool, roam: bool, directory: str | None,
          agent_override: str | None, non_interactive: bool,
-         user_prompt: str | None):
+         print_prompt: str | None, initial: str | None):
     """Bill management for AI agents.
 
     Run without a subcommand to launch your agent with the bills plugin.
@@ -279,11 +299,25 @@ def main(ctx, here: bool, roam: bool, directory: str | None,
     if ctx.invoked_subcommand is not None:
         return
 
+    if print_prompt and initial:
+        click.echo("Error: -p and --initial are mutually exclusive.", err=True)
+        sys.exit(1)
+
     agent = _resolve_agent(agent_override, non_interactive)
     project_dir = _resolve_project_dir(directory, here, roam, non_interactive)
 
+    if print_prompt is not None:
+        user_prompt = print_prompt
+        print_mode = True
+    elif initial is not None:
+        user_prompt = _resolve_initial(initial)
+        print_mode = False
+    else:
+        user_prompt = None
+        print_mode = False
+
     if agent == "claude":
-        _launch_claude(project_dir, user_prompt)
+        _launch_claude(project_dir, user_prompt, print_mode)
     elif agent == "gemini":
         _launch_gemini(project_dir, user_prompt)
 

@@ -323,6 +323,53 @@ class TestLaunchClaude:
         assert result.returncode == 0
         assert "-p" not in invocation["args"]
 
+    def test_initial_alias_resolves_to_skill(self, fake_agent, isolated_env):
+        """--initial cc resolves to /bills:credit-cards as positional arg."""
+        result, invocation = _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--here", "-i", "cc"],
+        )
+        assert result.returncode == 0
+        assert "-p" not in invocation["args"]
+        assert "/bills:credit-cards" in invocation["args"]
+
+    def test_initial_full_name_resolves(self, fake_agent, isolated_env):
+        """--initial check resolves to /bills:check."""
+        result, invocation = _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--here", "--initial", "check"],
+        )
+        assert result.returncode == 0
+        assert "/bills:check" in invocation["args"]
+
+    def test_initial_slash_command_passes_through(self, fake_agent, isolated_env):
+        """--initial /bills:explain passes through as-is."""
+        result, invocation = _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--here", "--initial", "/bills:explain"],
+        )
+        assert result.returncode == 0
+        assert "/bills:explain" in invocation["args"]
+
+    def test_initial_freeform_prompt(self, fake_agent, isolated_env):
+        """--initial with freeform text passes it as positional prompt."""
+        result, invocation = _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--here", "-i", "check my credit cards"],
+        )
+        assert result.returncode == 0
+        assert "-p" not in invocation["args"]
+        assert "check my credit cards" in invocation["args"]
+
+    def test_p_and_initial_mutually_exclusive(self, fake_agent, isolated_env):
+        """-p and --initial cannot be used together."""
+        result, _ = _run_bills_with_fake(
+            fake_agent, isolated_env,
+            extra_args=["--here", "-p", "some prompt", "-i", "cc"],
+        )
+        assert result.returncode != 0
+        assert "mutually exclusive" in result.stderr.lower()
+
 
 # =============================================================================
 # Preference Persistence

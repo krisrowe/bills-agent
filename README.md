@@ -101,7 +101,10 @@ bills -C /path          # use this directory once (doesn't save)
 bills --agent claude    # switch to Claude Code (saves for future runs)
 bills --agent gemini    # switch to Gemini CLI (saves for future runs)
 bills --non-interactive # fail instead of prompting (for scripts)
-bills -p "check my bills" # run non-interactively with this prompt
+bills -i cc             # start session with /bills:credit-cards
+bills -i check          # start session with /bills:check
+bills -i "check my cards" # start session with a freeform prompt
+bills -p "what's overdue?" # run non-interactively (print and exit)
 ```
 
 If the saved directory is moved or deleted, `bills` exits with an error
@@ -122,6 +125,7 @@ commands. Here's what you can ask and when to use each skill.
 
 ### Example prompts
 
+From inside a session:
 ```
 "Check my bills"                    → /bills:check
 "Are my credit cards paid?"         → /bills:credit-cards
@@ -130,19 +134,23 @@ commands. Here's what you can ask and when to use each skill.
 "Show me payments on all my cards"  → /bills:credit-cards
 ```
 
+From the shell — start an interactive session with a skill or prompt:
+```bash
+bills -i cc                                   # launch into /bills:credit-cards
+bills -i check                                # launch into /bills:check
+bills -i "check my cards with balance > $500" # launch with a freeform prompt
+```
+
 ### Quick questions without starting a session
 
-Use `bills -p` to ask a one-off question from the shell. The agent runs
-the prompt, prints the answer, and exits — no interactive session needed:
+Use `bills -p` for a one-off question — the agent runs the prompt, prints
+the answer, and exits:
 
 ```bash
 bills -p "are all my credit cards paid this month?"
 bills -p "what's overdue?"
 bills -p "do any promo deadlines expire in the next 90 days?"
 ```
-
-This is useful for spot checks, scripting, or when you just want a fast
-answer without the overhead of an interactive session.
 
 ### When `/bills:check` isn't enough for credit cards
 
@@ -416,7 +424,9 @@ bills -C ~/finances           # use this dir once (doesn't save)
 bills --agent claude          # switch to Claude Code (saves preference)
 bills --agent gemini          # switch to Gemini CLI (saves preference)
 bills --non-interactive       # fail instead of prompting (for scripts)
-bills -p "check my bills"     # run non-interactively with this prompt
+bills -i cc                  # start session with /bills:credit-cards
+bills -i "check my cards"    # start session with a freeform prompt
+bills -p "what's overdue?"   # run non-interactively (print and exit)
 ```
 
 Preferences are saved to `~/.config/bills/launcher.json`.
