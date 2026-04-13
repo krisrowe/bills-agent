@@ -1,0 +1,146 @@
+---
+name: check-credit-cards
+description: Check credit card payment status by searching recent transactions on each declared account. Use when asked about credit card payments, whether cards are paid, or to verify payment status across credit accounts.
+---
+
+# Check Credit Cards Skill
+
+## Overview
+
+Verify whether credit card payments have been made by searching actual
+transaction history on each card — not recurring streams. This is more
+reliable than stream matching because autopay transactions have generic
+merchant names that don't map to specific cards, and payment amounts vary
+each month.
+
+## Data Sources
+
+**bills-mcp** (declared accounts):
+- `list_credit_accounts` — declared credit accounts with due_day, payment_method, funding_account, promos
+- `list_promo_accounts` — accounts with active 0% financing
+- `list_funding_accounts` — checking/savings accounts that pay bills
+
+**monarch-access** (live data):
+- `list_accounts` — current balances, account IDs, credential status
+- `list_transactions` — transaction history per account
+
+## Phase 1: Load Data
+
+Call these in parallel — no user interaction needed:
+
+1. `list_credit_accounts` — get declared accounts from config
+2. `list_accounts` — get Monarch accounts with current balances
+3. `list_funding_accounts` — get declared checking/savings accounts
+
+## Phase 2: Match Declared to Monarch Accounts
+
+For each declared credit account, find the corresponding Monarch account:
+
+- Match by `monarch_account_id` if configured
+- Otherwise match by last4 digits against Monarch account `mask`
+- If ambiguous (multiple matches), ask the user to clarify
+- If no match found, flag as disconnected
+
+After matching, update any unlinked accounts with `update_credit_account`
+to store the `monarch_account_id` for future runs.
+
+## Phase 3: Search Payment Transactions
+
+For each matched account, search for recent payments:
+
+```
+list_transactions(account_id=<credit_card_account_id>, start_date=<60_days_ago>)
+```
+
+**Identify payments:** Look for positive-amount transactions on the credit
+card account. These represent payments credited to the card. Common
+category names include "Credit Card Payment", "Payment", "Transfer".
+
+Pull at least the **last 2 payments** to show both current and prior cycle.
+
+## Phase 4: Cross-Reference Funding Accounts
+
+For each payment found on the credit card side, optionally identify which
+checking/savings account it came from:
+
+1. Get the payment amount and date from the card-side transaction
+2. Search `list_transactions` on each declared funding account for a
+   matching debit (same amount, date within +/-2 days)
+3. If found, note the funding account name/mask
+
+This step is best-effort — autopay merchants and timing offsets may prevent
+exact matches. Skip if it would require too many API calls (more than 3-4
+funding accounts).
+
+## Phase 5: Present Results
+
+Build a table with one row per declared credit account:
+
+```
+| # | Account | Balance | Due | Last Payment | Date | Prior Payment | Date | Paid From |
+|---|---------|---------|-----|-------------|------|---------------|------|-----------|
+```
+
+Column definitions:
+- **Account** — name and last4 from config (e.g., "Chase Freedom (...5035)")
+- **Balance** — current balance from Monarch `list_accounts`
+- **Due** — day of month from config `due_day` (e.g., "9th")
+- **Last Payment** — most recent payment amount
+- **Date** — date of most recent payment
+- **Prior Payment** — second most recent payment amount
+- **Date** — date of second most recent payment
+- **Paid From** — funding account mask or name if cross-reference succeeded, or payment method from config (e.g., "autopay", "epay")
+
+### Status Indicators
+
+After the table, flag any concerns:
+
+**Missed payment** — due day has passed this month and no payment found since
+the previous due date. Show: account name, due day, days overdue, last known
+payment date.
+
+**Promo deadline approaching** — account has a promo plan expiring within 90
+days. Calculate:
+- Months remaining = days until expiration / 30
+- Required monthly payment = promo balance / months remaining
+- Compare to recent payment amounts — flag if insufficient
+- Show the math so the user can verify
+
+**Disconnected account** — Monarch credentials need refresh (`updateRequired`
+is true on the credential). Show: institution name, which accounts are affected,
+note that balance and transactions may be stale.
+
+**No Monarch match** — declared account has no matching Monarch account. Can't
+verify anything. Ask if the account is still active or if the last4 has changed.
+
+**Missing due day** — account doesn't have `due_day` configured. Note this and
+suggest checking a recent statement email or the card issuer's website.
+
+**Zero balance** — account has $0 balance. No payment needed — skip from
+concerns. Still show in the table for completeness.
+
+## Phase 6: Fix and Update
+
+After presenting results, offer to fix problems:
+
+- **Link unmatched accounts** — if a declared account wasn't matched to Monarch,
+  help the user find it by searching account names or last4 digits
+- **Set missing due_day** — `update_credit_account(last4, due_day=N)`
+- **Update promo balances** — if a promo's `updated` date is stale (>30 days),
+  update from the current Monarch balance
+- **Add missing accounts** — if the user mentions a card not in config,
+  `register_credit_account` to add it
+
+## Important Notes
+
+- Always present the table first, then flags. The table is the primary output.
+- Sort by concern level: missed payments first, then promo deadlines, then
+  disconnected, then clean accounts.
+- This skill does NOT use recurring streams. It queries transaction history
+  directly. This avoids the issues with generic autopay merchant names and
+  incomplete stream coverage.
+- Payments appear as positive amounts on the credit card account (credits).
+  Charges appear as negative amounts (debits). Don't confuse the two.
+- If `list_transactions` returns no results for an account, the account may
+  be disconnected or the date range may be too narrow. Check credential status
+  before assuming no payment was made.
