@@ -250,14 +250,15 @@ def _launch_claude(project_dir: str, user_prompt: str | None = None,
         _agent_command("claude"),
         "--plugin-dir", str(plugin_path),
     ]
+
+    if user_prompt is not None and print_mode:
+        cmd.extend(["-p", user_prompt])
+
     for tool in allowed_tools:
         cmd.extend(["--allowedTools", tool])
 
-    if user_prompt is not None:
-        if print_mode:
-            cmd.extend(["-p", user_prompt])
-        else:
-            cmd.append(user_prompt)
+    if user_prompt is not None and not print_mode:
+        cmd.extend(["--", user_prompt])
 
     subprocess.run(cmd)
 
