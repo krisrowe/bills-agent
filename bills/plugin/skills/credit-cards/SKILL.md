@@ -58,7 +58,7 @@ Query all matched card accounts for payments in a single call:
 ```
 list_transactions(
     account_ids=[<all_matched_card_account_ids>],
-    start_date=<60_days_ago>,
+    start_date=<90_days_ago>,
     is_expense=false
 )
 ```
@@ -71,11 +71,53 @@ payments out of the result window on high-volume cards.
 From the results, group payments by account and identify the last 2-3
 payments per card to populate the table's Last Due and Prior Due columns.
 
-**Autopay preemption:** For `auto_pay_full` accounts, check for ANY payment
-on the card between the previous due date and the current due date. If a
-large manual payment earlier in the cycle already satisfied the balance,
-autopay legitimately won't fire. Only flag as missing if NO payment of
-any kind was found in that cycle window.
+**Assign payments to cycles by walking history oldest-to-newest.** A payment
+belongs to the most recent prior due date that hasn't already been claimed by
+an earlier payment.
+
+Algorithm:
+
+1. Enumerate the last 4-6 due dates from `due_day` (skip for cards with no
+   configured due day).
+2. For each payment (oldest first), assign it to the **oldest unclaimed due
+   date** whose due date is on or before the payment date.
+3. If a payment date is many days after its assigned due date, it's a late
+   payment for that cycle — NOT an early payment for the next one.
+4. A cycle can only be credited as "paid early" if every older cycle already
+   has a payment assigned.
+
+Example — card due the 10th each month:
+
+| Payment date | Payment amount | Assigned cycle | Status |
+|--------------|---------------|----------------|--------|
+| 2/10 | $500 | Feb | on time |
+| 3/10 | $500 | Mar | on time |
+| 4/8 (2 days before April due) | $500 | Apr | ✅ early (Feb+Mar already claimed) |
+
+Counter-example — same card, missing Feb payment:
+
+| Payment date | Payment amount | Assigned cycle | Status |
+|--------------|---------------|----------------|--------|
+| (nothing in Feb) | — | Feb UNCLAIMED | |
+| 3/10 | $500 | Mar | on time |
+| 4/8 | $500 | Feb (oldest unclaimed on/before 4/8) | ⚠️ 28d late |
+| Apr cycle | — | UNCLAIMED | ❌ LATE |
+
+**For bi-weekly or multi-payment patterns** (like a card paid every 14 days
+regardless of monthly due_day): detect cadence from payment history. If
+payments land at consistent intervals shorter than the cycle, report cycle
+status based on whether total paid within the cycle window is reasonable
+relative to the pattern, not one-payment-per-cycle. Show the rhythm inline
+in the output so the user can verify your reasoning (e.g., "biweekly
+pattern: 2/3, 2/17, 3/3, 3/17 — next expected ~3/31, found 3/31 ✅").
+
+**Autopay preemption:** `auto_pay_full` accounts are expected to have one
+payment per cycle landing on/near due_day. Under the assignment algorithm
+above, if a cycle gets claimed by a payment on or before its due date, it's
+`✅ Paid`. If the cycle is unclaimed at the time of the next due date, it's
+`❌ LATE` — don't preempt based on the current balance (which reflects new
+charges since the statement closed, not whether the statement itself was
+satisfied).
 
 ## Phase 3b: Fallback — Search Funding Side for Disconnected Accounts
 
