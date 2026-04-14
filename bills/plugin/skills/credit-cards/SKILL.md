@@ -53,26 +53,29 @@ to store the `monarch_account_id` for future runs.
 
 ## Phase 3: Search Payment Transactions
 
-For each matched account, search for recent payments:
+Query all matched card accounts for payments in a single call:
 
 ```
-list_transactions(account_id=<credit_card_account_id>, start_date=<60_days_ago>)
+list_transactions(
+    account_ids=[<all_matched_card_account_ids>],
+    start_date=<60_days_ago>,
+    is_expense=false
+)
 ```
 
-**Identify payments:** Look for positive-amount transactions on the credit
-card account. These represent payments credited to the card. Common
-category names include "Credit Card Payment", "Payment", "Transfer".
+`is_expense=false` returns only positive-amount transactions — payments
+received on the card, refunds, credits. No charges. This dramatically
+reduces the response size and avoids the problem of charges pushing
+payments out of the result window on high-volume cards.
 
-Pull at least the **last 2 payments** to show both current and prior cycle.
-
-**For high-volume cards** where charges push payments out of the result window,
-use `search="payment"` to find credit card payments directly.
+From the results, group payments by account and identify the last 2-3
+payments per card to populate the table's Last Due and Prior Due columns.
 
 **Autopay preemption:** For `auto_pay_full` accounts, check for ANY payment
-(positive credit) on the card between the previous due date and the current
-due date. If a large manual payment earlier in the cycle already satisfied
-the balance, autopay legitimately won't fire. Only flag as missing if NO
-payment of any kind was found in that cycle window.
+on the card between the previous due date and the current due date. If a
+large manual payment earlier in the cycle already satisfied the balance,
+autopay legitimately won't fire. Only flag as missing if NO payment of
+any kind was found in that cycle window.
 
 ## Phase 3b: Fallback — Search Funding Side for Disconnected Accounts
 
@@ -82,8 +85,8 @@ When Phase 3 returns no transactions for an account due to:
 
 Search from the **funding side** instead:
 
-1. Call `list_transactions` with **no `account_ids` filter**, using `search`
-   set to the institution/issuer name (e.g., "First National", "Acme Bank")
+1. Call `list_transactions` with **no `account_ids` filter**, `is_expense=true`,
+   and `search` set to the institution/issuer name (e.g., "First National", "Acme Bank")
 2. Try multiple search terms if the first returns nothing:
    - Issuer name (e.g., "First National", "Acme Bank")
    - Card brand or program name (e.g., "Rewards Plus", "Travel Card")
