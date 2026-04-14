@@ -375,6 +375,41 @@ Data files shipped with the package (e.g., `config.yaml`) must be declared in `p
 Without this, `pipx install` won't include them and the installed `bills-mcp` will crash
 at runtime with `FileNotFoundError`.
 
+### The Claude Plugin Lives Inside the Python Package
+
+The Claude plugin (`bills/plugin/`) is a subdirectory of the `bills` Python
+package — not a sibling at the repo root. This is deliberate so the plugin
+ships with `pipx install`. When `bills` launches Claude Code, it points
+`--plugin-dir` at `files("bills") / "plugin"`, which resolves to the
+installed pipx location (or the working tree for editable installs).
+
+**Gotchas to watch for:**
+
+- **Don't move the plugin back to a repo-root location.** Putting it at
+  `claude/plugin/` outside `bills/` breaks pipx installs — the plugin files
+  don't ship because only `bills*` packages are included.
+
+- **Dotfiles require explicit patterns in `package-data`.** Setuptools'
+  `**/*` glob does NOT match dotfiles, so `.claude-plugin/plugin.json` and
+  `.mcp.json` get silently dropped from the wheel. The current config
+  enumerates them explicitly:
+  ```toml
+  "bills.plugin" = ["**/*", ".*", ".claude-plugin/*", ".mcp.json"]
+  ```
+  If you add more dotfiles to the plugin, update this pattern.
+
+- **`__init__.py` is required** in `bills/plugin/` so setuptools treats it
+  as a Python package and includes it in `find_packages`.
+
+- **Hooks reference `${CLAUDE_PLUGIN_ROOT}`** which Claude Code sets at
+  runtime to wherever `--plugin-dir` points. This resolves correctly whether
+  the plugin is loaded from a working tree (dev) or pipx site-packages
+  (prod) — no path fixup needed.
+
+- **After changing the plugin structure**, always verify with a fresh
+  `pipx install --force .` followed by `ls ~/.local/pipx/venvs/bills-agent/lib/python*/site-packages/bills/plugin/`
+  to confirm the expected files actually shipped.
+
 
 ## Testing
 
