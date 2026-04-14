@@ -564,7 +564,11 @@ When classifying recurring streams (income, transfer, expense), prefer Monarch's
 data model constructs (category groups, account types) over pattern matching on
 user-customized category names. Patterns are fragile — they break when users rename
 categories and aren't portable. Category `group.type` (income/transfer/expense) is a
-Monarch system-level classification that works universally. See `docs/TODOS.md` A2.
+Monarch system-level classification that works universally. See
+[Monarch Default Categories](docs/monarch/categories.md) for the full default
+taxonomy and why relying on group types (not category names) is portable across
+users; and [Design TODOs](docs/TODOS.md) item A2 for the ongoing work to apply
+this principle consistently across stream classification paths.
 
 ### Persist Only What Monarch Can't Provide
 

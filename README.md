@@ -155,9 +155,12 @@ bills -p "do any promo deadlines expire in the next 90 days?"
 ### When `/bills:check` isn't enough for credit cards
 
 `/bills:check` relies on Monarch's recurring stream detection, which works well
-for fixed-amount bills but often struggles with credit cards. Common problems
-and how `/bills:credit-cards` works around them are documented in
-[docs/credit-cards.md](docs/credit-cards.md).
+for fixed-amount bills but often struggles with credit cards. See
+[Credit Card Verification](docs/credit-cards.md), which explains when to use
+`/bills:check` vs `/bills:credit-cards`, the stream-matching failure modes each
+works around (generic autopay merchant names, disconnected credentials,
+vendor-only cards), and how the transaction-history approach bypasses stream
+detection entirely.
 
 ## Two Ways to Use the Plugin (Claude Code)
 
