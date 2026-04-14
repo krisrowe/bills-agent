@@ -71,54 +71,63 @@ payments out of the result window on high-volume cards.
 From the results, group payments by account and identify the last 2-3
 payments per card to populate the table's Last Due and Prior Due columns.
 
-**Assign payments to cycles by walking history oldest-to-newest.** A payment
-belongs to the most recent prior due date that hasn't already been claimed by
-an earlier payment.
+**Goal: align 3 prior due dates with 3 separate payments, each within ±28
+days of its assigned due date.** The 3-cycle target gives enough signal to
+distinguish a one-off late payment from a systematic mapping problem. If
+you can't achieve this cleanly within the 90-day window, widen the search
+or flag the card for user review — don't guess.
 
-Algorithm:
+### Matching strategy
 
-1. Enumerate prior due dates within the query window (90 days). For monthly
-   cards this is typically 3 cycles; for biweekly or more frequent patterns,
-   correspondingly more. Skip for cards with no configured due day.
-2. For each payment (oldest first), assign it to the **oldest unclaimed due
-   date** whose due date is on or before the payment date.
-3. If a payment date is many days after its assigned due date, it's a late
-   payment for that cycle — NOT an early payment for the next one.
-4. A cycle can only be credited as "paid early" if every older cycle already
-   has a payment assigned.
+1. Enumerate prior due dates within the query window. For monthly cards
+   that's typically 3 cycles. Skip for cards with no configured due day.
+2. For each prior due date, look for a **separate** payment within ±28
+   days. Each payment can only be claimed by one cycle.
+3. Prefer payments that land closest to the due date when multiple
+   candidates could match a single cycle.
+4. If a cycle has no payment within ±28 days, flag it as ❌ LATE for that
+   cycle. If the current cycle (not yet at its due date) has no payment
+   yet, status is ⏰ DUE, not LATE.
 
-Example — card due the 10th each month:
+### Sanity checks — don't accept unrealistic patterns
 
-| Payment date | Payment amount | Assigned cycle | Status |
-|--------------|---------------|----------------|--------|
-| 2/10 | $500 | Feb | on time |
-| 3/10 | $500 | Mar | on time |
-| 4/8 (2 days before April due) | $500 | Apr | ✅ early (Feb+Mar already claimed) |
+If 3 consecutive cycles appear to be consistently late by ≥14 days, the
+interpretation is almost certainly wrong. Possibilities:
 
-Counter-example — same card, missing Feb payment:
+- The `due_day` in config is off — e.g., user set 9th but the real due is
+  the 27th
+- Payments are landing early for the next cycle, not late for the prior
+- The card switched due dates mid-history
+- A payment is missing from the data (disconnected account, filtered out)
 
-| Payment date | Payment amount | Assigned cycle | Status |
-|--------------|---------------|----------------|--------|
-| (nothing in Feb) | — | Feb UNCLAIMED | |
-| 3/10 | $500 | Mar | on time |
-| 4/8 | $500 | Feb (oldest unclaimed on/before 4/8) | ⚠️ 28d late |
-| Apr cycle | — | UNCLAIMED | ❌ LATE |
+In this situation, **do not report 3 late payments**. Instead:
 
-**For bi-weekly or multi-payment patterns** (like a card paid every 14 days
-regardless of monthly due_day): detect cadence from payment history. If
-payments land at consistent intervals shorter than the cycle, report cycle
-status based on whether total paid within the cycle window is reasonable
-relative to the pattern, not one-payment-per-cycle. Show the rhythm inline
-in the output so the user can verify your reasoning (e.g., "biweekly
-pattern: 2/3, 2/17, 3/3, 3/17 — next expected ~3/31, found 3/31 ✅").
+- Flag the card as needing attention in the output
+- Show the observed payment dates alongside the assumed due dates so the
+  user can see the mismatch
+- Ask the user whether the due day is correct, or offer to update it
+- Use common sense to propose an alternative interpretation (e.g., "these
+  payments look like they're landing ~7 days before a due date of the
+  17th, not 25 days late for a due date of the 9th")
 
-**Autopay preemption:** `auto_pay_full` accounts are expected to have one
-payment per cycle landing on/near due_day. Under the assignment algorithm
-above, if a cycle gets claimed by a payment on or before its due date, it's
-`✅ Paid`. If the cycle is unclaimed at the time of the next due date, it's
-`❌ LATE` — don't preempt based on the current balance (which reflects new
-charges since the statement closed, not whether the statement itself was
-satisfied).
+### Bi-weekly / multi-payment patterns
+
+Some cards are paid on a cadence shorter than the statement cycle (e.g.,
+biweekly $110 on a card that bills monthly). For these:
+
+- Detect the cadence from payment intervals in history
+- Report cycle status based on whether total paid within each cycle
+  window is consistent with the pattern
+- Show the rhythm inline so the user can verify (e.g., "biweekly pattern:
+  2/3, 2/17, 3/3, 3/17 — next expected ~3/31, found 3/31 ✅")
+
+### Autopay preemption
+
+`auto_pay_full` accounts are expected to have one payment per cycle near
+due_day. Under the matching above, the cycle is `✅ Paid` when a payment
+lands on or before its due date. Don't preempt based on current balance
+— current balance reflects new charges since the statement closed, not
+whether the statement itself was satisfied.
 
 ## Phase 3b: Fallback — Search Funding Side for Disconnected Accounts
 
