@@ -77,8 +77,9 @@ an earlier payment.
 
 Algorithm:
 
-1. Enumerate the last 4-6 due dates from `due_day` (skip for cards with no
-   configured due day).
+1. Enumerate prior due dates within the query window (90 days). For monthly
+   cards this is typically 3 cycles; for biweekly or more frequent patterns,
+   correspondingly more. Skip for cards with no configured due day.
 2. For each payment (oldest first), assign it to the **oldest unclaimed due
    date** whose due date is on or before the payment date.
 3. If a payment date is many days after its assigned due date, it's a late
