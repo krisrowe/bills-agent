@@ -112,20 +112,28 @@ funding accounts).
 
 ## Phase 5: Present Results
 
-Build a table with one row per declared credit account:
+Build a table with one row per declared credit account, **sorted by priority**:
+
+1. ❌ LATE — overdue, needs immediate action
+2. ⏰ DUE — due soon, needs attention
+3. ✅ Paid — sorted by Next due ascending (soonest first)
+4. ? / No link — unknown status, can't verify
+5. $0 bal — no action needed, bottom of table
 
 ```
-| # |    | Account              | Balance    | Due  | Status    | Next | Last Due   | Paid | $      | Prior Due  | Paid | $      | Paid From      |
-|---|----|----------------------|------------|------|-----------|------|------------|------|--------|------------|------|--------|----------------|
-| 1 |    | Acme Visa (1234)     | $2,500.00  | 15th | ✅ Paid   | 22d  | ✅ 3/15    | 3/15 | $1,200 | ✅ 2/15    | 2/14 | $980   | autopay (9876) |
-| 2 |    | BigBox Store (5678)  | $4,200.00  | 10th | ⏰ DUE    | 1d   | ✅ 3/10    | 3/10 | $150   | ❌ 2/10    | —    | $0*    | manual (4321)  |
-| 3 |    | Travel Card (9012)   | $800.00    | 1st  | ✅ Paid   | 18d  | ✅ 4/1     | 3/20 | $3,500 | ✅ 3/1     | 2/25 | $2,800 | autopay (4321) |
-| 4 |    | Rewards Plus (3456)  | $337.00    | 26th | ✅ Paid   | 13d  | ✅ 3/26    | 3/26 | $25    | ✅ 2/26    | 2/26 | $25    | manual (9876)  |
-| 5 |    | Promo Card (7890)    | $6,444.00  | ?    | ?         | —    | —          | 3/31 | $110   | —          | 3/17 | $110   | manual (4321)  |
-| 6 | 🔌 | Old HELOC (2468)     | $5,000.00  | 9th  | ✅ Paid   | 26d  | ✅ 4/9     | 4/9  | $105   | ✅ 3/9     | 3/9  | $124   | auto_draft (5555) |
-| 7 |    | Dept Store (1357)    | $0.00      | ?    | $0 bal    | —    | —          | —    | —      | —          | —    | —      | manual         |
-| 8 | ❌ | Spouse Card (2468)   | ?          | ?    | No link   | —    | —          | 4/8  | $107   | —          | 3/25 | $107   | manual         |
+| # |    | Account              | Balance    | Due  | Status    | Next | Last Due   | Paid | $      | Prior Due  | Paid | $      | Paid From         |
+|---|----|----------------------|------------|------|-----------|------|------------|------|--------|------------|------|--------|-------------------|
+| 1 |    | BigBox Store (5678)  | $4,200.00  | 10th | ⏰ DUE    | 1d   | ✅ 3/10    | 3/10 | $150   | ❌ 2/10    | —    | $0*    | manual (4321)     |
+| 2 |    | Travel Card (9012)   | $800.00    | 1st  | ✅ Paid   | 18d  | ✅ 4/1     | 3/20 | $3,500 | ✅ 3/1     | 2/25 | $2,800 | autopay (4321)    |
+| 3 |    | Rewards Plus (3456)  | $337.00    | 26th | ✅ Paid   | 13d  | ✅ 3/26    | 3/26 | $25    | ✅ 2/26    | 2/26 | $25    | manual (9876)     |
+| 4 |    | Acme Visa (1234)     | $2,500.00  | 15th | ✅ Paid   | 22d  | ✅ 3/15    | 3/15 | $1,200 | ✅ 2/15    | 2/14 | $980   | autopay (9876)    |
+| 5 | 🔌 | Old HELOC (2468)     | $5,000.00  | 9th  | ✅ Paid   | 26d  | ✅ 4/9     | 4/9  | $105   | ✅ 3/9     | 3/9  | $124   | auto_draft (5555) |
+| 6 |    | Promo Card (7890)    | $6,444.00  | ?    | ?         | —    | —          | 3/31 | $110   | —          | 3/17 | $110   | manual (4321)     |
+| 7 | ❌ | Spouse Card (2468)   | ?          | ?    | No link   | —    | —          | 4/8  | $107   | —          | 3/25 | $107   | manual            |
+| 8 |    | Dept Store (1357)    | $0.00      | ?    | $0 bal    | —    | —          | —    | —      | —          | —    | —      | manual            |
 ```
+
+*\* BigBox Store 2/10: payment posted then reversed — net $0*
 
 The second column is a **connectivity icon** (blank when healthy):
 - 🔌 = Monarch credential disconnected (`updateRequired`) — balance/transactions may be stale
